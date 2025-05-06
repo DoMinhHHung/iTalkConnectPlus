@@ -1,29 +1,65 @@
 // Đảm bảo import Platform
-import { Platform } from 'react-native';
+import { Platform } from "react-native";
+import { useState, useEffect } from "react";
+import axios from "axios";
 
 // API URLs
-// Sử dụng 192.168.1.5 cho kết nối trong mạng LAN
-// Sử dụng 10.0.2.2 cho Android emulator kết nối đến localhost của máy chủ
-// Sử dụng localhost khi chạy trên web
+// Các IP phổ biến:
+// - 192.168.1.x: IP trong mạng LAN
+// - 10.0.2.2: IP đặc biệt cho Android Emulator để kết nối đến localhost của máy
+// - localhost: cho thiết bị iOS
+// - 127.0.0.1: localhost
+
+// Danh sách các IP phổ biến có thể thử kết nối (theo thứ tự ưu tiên)
+export const POSSIBLE_IPS = [
+  // '192.168.1.3',
+  // '192.168.1.5',  // IP phổ biến trong mạng LAN
+  "192.168.1.7", // IP phổ biến khác trong mạng LAN
+  // '192.168.1.10', // IP phổ biến khác trong mạng LAN
+  // '192.168.0.102', // IP phổ biến trong dải mạng khác
+  // '192.168.0.100', // IP phổ biến trong dải mạng khác
+];
+
 const getHostAddress = () => {
-  // Use the LAN IP directly for all platforms
-  return '192.168.1.5';
-  
-  // Uncomment below for dynamic configuration if needed later
-  /*
-  if (Platform.OS === 'android') {
-    return __DEV__ ? '10.0.2.2' : '192.168.1.5';
+  if (Platform.OS === "android") {
+    // Cho Android emulator, sử dụng 10.0.2.2 để truy cập localhost của máy host
+    if (__DEV__ && Platform.constants.uiMode?.includes("simulator")) {
+      return "10.0.2.2";
+    }
+
+    // Cho thiết bị Android thật, thử các IP trong mạng LAN
+    return POSSIBLE_IPS[0]; // Sử dụng IP đầu tiên trong danh sách
   }
-  if (Platform.OS === 'ios') {
-    return __DEV__ ? 'localhost' : '192.168.1.5';
+
+  if (Platform.OS === "ios") {
+    // Cho iOS simulator
+    if (__DEV__) {
+      return "localhost";
+    }
+
+    // Cho thiết bị iOS thật, thử các IP trong mạng LAN
+    return POSSIBLE_IPS[0];
   }
-  return 'localhost'; // Fallback cho web
-  */
+
+  // Fallback cho web hoặc các nền tảng khác
+  return "localhost";
 };
 
-// Cấu hình động dựa trên môi trường
+// Khởi tạo API URL
 export const API_URL = `http://${getHostAddress()}:3005`;
-export const SOCKET_URL = `http://${getHostAddress()}:3005`;
+console.log(`Khởi tạo API_URL: ${API_URL}`);
+
+// Để client có thể chuyển đổi giữa các IP khác nhau nếu kết nối thất bại
+export const getAlternativeAPI = (index: number = 0) => {
+  if (index >= POSSIBLE_IPS.length) {
+    return null; // Đã thử tất cả các IP khả dụng
+  }
+  const alternativeIP = POSSIBLE_IPS[index];
+  return `http://${alternativeIP}:3005`;
+};
+
+// Sử dụng Socket URL giống API URL
+export const SOCKET_URL = API_URL;
 
 // App constants
 export const APP_NAME = "iTalk+";
@@ -35,6 +71,7 @@ export const STORAGE_KEYS = {
   USER: "user",
   THEME: "app_theme",
   LANGUAGE: "app_language",
+  API_IP: "api_ip", // Thêm khóa lưu IP đang sử dụng
 };
 
 // Default avatar
@@ -46,6 +83,6 @@ export const CLOUDINARY_CONFIG = {
   API_KEY: "731712143896246",
   API_SECRET: "BPwn4ELB3UL0W4obHwW3Vjeoo1M",
   UPLOAD_PRESET: "italk_app_preset",
-  FOLDER: "italk_app"
+  FOLDER: "italk_app",
 };
 //BPwn4ELB3UL0W4obHwW3Vjeoo1M api secret key

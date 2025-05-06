@@ -27,7 +27,15 @@ mongoose
   .catch((err) => console.error(err));
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+    maxAge: 86400,
+  })
+);
 // Tăng giới hạn kích thước request body cho uploads
 app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
@@ -719,6 +727,9 @@ io.on("connection", (socket) => {
 });
 
 // Khởi động server
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server đang chạy trên địa chỉ http://0.0.0.0:${PORT}`);
+  console.log(
+    `Server cũng có thể truy cập qua http://192.168.1.7:${PORT} từ các thiết bị khác`
+  );
 });

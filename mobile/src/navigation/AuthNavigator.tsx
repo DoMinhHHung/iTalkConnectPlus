@@ -12,6 +12,7 @@ const Stack = createStackNavigator();
 const AuthNavigator = () => {
   return (
     <Stack.Navigator
+      id={undefined}
       screenOptions={{
         headerShown: false,
         cardStyle: { backgroundColor: "#FFFFFF" },

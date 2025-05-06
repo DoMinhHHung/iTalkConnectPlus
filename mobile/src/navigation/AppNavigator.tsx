@@ -20,6 +20,11 @@ import ProfileScreen from "../screens/main/ProfileScreen";
 import ChatDetailScreen from "../screens/main/ChatDetailScreen";
 import ContactDetailScreen from "../screens/main/ContactDetailScreen";
 import EditProfileScreen from "../screens/main/EditProfileScreen";
+import CreateGroupScreen from "../screens/main/CreateGroupScreen";
+import GroupDetailsScreen from "../screens/main/GroupDetailsScreen";
+
+// Common Screens
+import ConnectionErrorScreen from "../screens/common/ConnectionErrorScreen";
 
 // Stack Navigator Types
 type AuthStackParamList = {
@@ -36,6 +41,7 @@ type MainStackParamList = {
     chatName: string;
     contactId: string;
     contactAvatar?: string;
+    isGroup?: boolean;
   };
   ContactDetail: {
     contactId: string;
@@ -43,6 +49,10 @@ type MainStackParamList = {
   };
   EditProfile: {
     user: any;
+  };
+  CreateGroup: undefined;
+  GroupDetails: {
+    groupId: string;
   };
 };
 
@@ -62,6 +72,7 @@ const MainTab = createBottomTabNavigator<MainTabParamList>();
 const AuthNavigator = () => {
   return (
     <AuthStack.Navigator
+      id={undefined}
       screenOptions={{
         headerShown: false,
         cardStyle: { backgroundColor: "#fff" },
@@ -82,6 +93,7 @@ const AuthNavigator = () => {
 const MainTabNavigator = () => {
   return (
     <MainTab.Navigator
+      id={undefined}
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName: keyof typeof Ionicons.glyphMap = "chatbubble";
@@ -129,6 +141,7 @@ const MainTabNavigator = () => {
 const MainNavigator = () => {
   return (
     <MainStack.Navigator
+      id={undefined}
       screenOptions={{
         headerShown: false,
       }}
@@ -137,21 +150,30 @@ const MainNavigator = () => {
       <MainStack.Screen name="ChatDetail" component={ChatDetailScreen} />
       <MainStack.Screen name="ContactDetail" component={ContactDetailScreen} />
       <MainStack.Screen name="EditProfile" component={EditProfileScreen} />
+      <MainStack.Screen name="CreateGroup" component={CreateGroupScreen} />
+      <MainStack.Screen name="GroupDetails" component={GroupDetailsScreen} />
     </MainStack.Navigator>
   );
 };
 
+// Loading indicator component
+const LoadingScreen = () => (
+  <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+    <ActivityIndicator size="large" color="#2196F3" />
+  </View>
+);
+
 // Root navigator
 const AppNavigator = () => {
-  const { isLoading, token } = useContext(AuthContext);
+  const { isLoading, token, apiConnected } = useContext(AuthContext);
 
   if (isLoading) {
-    // Display loading screen while checking authentication state
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#2196F3" />
-      </View>
-    );
+    return <LoadingScreen />;
+  }
+
+  // Kiểm tra kết nối API
+  if (!apiConnected) {
+    return <ConnectionErrorScreen />;
   }
 
   // Navigate based on authentication state

@@ -14,11 +14,48 @@ const execAsync = promisify(exec);
 // Kết nối với GridFS
 let gfs;
 
+// Đảm bảo kết nối MongoDB trước khi sử dụng GridFS
+const ensureGridFSConnection = () => {
+  return new Promise((resolve, reject) => {
+    if (gfs) {
+      return resolve(gfs);
+    }
+
+    // Kiểm tra kết nối MongoDB
+    if (mongoose.connection.readyState !== 1) {
+      console.log("MongoDB connection not ready, waiting...");
+      // Thiết lập timeout để tránh chờ vô hạn
+      const timeout = setTimeout(() => {
+        reject(new Error("MongoDB connection timeout"));
+      }, 5000);
+
+      // Lắng nghe sự kiện kết nối thành công
+      mongoose.connection.once("connected", () => {
+        clearTimeout(timeout);
+        console.log("MongoDB connected, initializing GridFS bucket");
+        gfs = new GridFSBucket(mongoose.connection.db, {
+          bucketName: "uploads",
+        });
+        resolve(gfs);
+      });
+    } else {
+      // Nếu đã kết nối, khởi tạo GridFS
+      console.log("MongoDB already connected, initializing GridFS bucket");
+      gfs = new GridFSBucket(mongoose.connection.db, {
+        bucketName: "uploads",
+      });
+      resolve(gfs);
+    }
+  });
+};
+
 // Khởi tạo bucket GridFS
 mongoose.connection.once("open", () => {
+  console.log("MongoDB connection open event triggered");
   gfs = new GridFSBucket(mongoose.connection.db, {
     bucketName: "uploads",
   });
+  console.log("GridFS bucket initialized");
 });
 
 // Thời gian sống của file (7 ngày = 604800000 ms)
@@ -120,79 +157,104 @@ const saveMessageRoute = async (req, res) => {
 // Hàm xử lý upload file vào MongoDB GridFS
 const uploadFile = async (req, res) => {
   try {
-    console.log("Bắt đầu xử lý upload file vào MongoDB GridFS...");
-
+    // Kiểm tra xem có file trong request không
     if (!req.file) {
-      console.log("Không có file trong request");
-      return res.status(400).json({ message: "Không có file nào được upload" });
+      return res
+        .status(400)
+        .json({ message: "Không có file nào được gửi lên" });
     }
 
-    console.log("File đã nhận:", req.file.originalname);
-    console.log("File type:", req.body.type);
-    console.log("File mime:", req.file.mimetype);
+    console.log("Upload file request:", {
+      fileInfo: {
+        fieldname: req.file.fieldname,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+      },
+      body: req.body,
+    });
 
-    const { type } = req.body;
+    // Đảm bảo GridFS đã được khởi tạo
+    await ensureGridFSConnection();
 
-    // Tạo ID mới cho file
-    const fileId = new ObjectId();
-
-    // Ngày hết hạn của file (7 ngày từ hiện tại)
-    const expiryDate = new Date(Date.now() + FILE_EXPIRY_TIME);
-
-    // Tạo metadata cho file
+    // Chuẩn bị metadata cho file
     const metadata = {
-      type,
       originalName: req.file.originalname,
-      size: req.file.size,
-      uploadDate: new Date(),
-      expiryDate,
       mimetype: req.file.mimetype,
+      size: req.file.size,
+      uploadedBy: req.user ? req.user._id : "anonymous",
+      uploadDate: new Date(),
+      senderId: req.body.senderId,
+      receiverId: req.body.receiverId,
+      type: req.body.type || "file",
     };
 
-    // Upload file vào GridFS trực tiếp từ buffer
-    const uploadStream = gfs.openUploadStreamWithId(
-      fileId,
-      req.file.originalname,
-      {
-        metadata,
-      }
-    );
+    // Tạo unique filename
+    const uniqueFilename = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${
+      req.file.originalname
+    }`;
 
-    // Ghi dữ liệu trực tiếp từ buffer vào GridFS
-    uploadStream.write(req.file.buffer);
-    uploadStream.end();
-
-    // Chờ cho đến khi upload hoàn tất
-    await new Promise((resolve, reject) => {
-      uploadStream.on("finish", resolve);
-      uploadStream.on("error", reject);
+    // Tạo writeStream để ghi file vào GridFS
+    const writeStream = gfs.openUploadStream(uniqueFilename, {
+      metadata: metadata,
     });
+
+    // Tạo promise để theo dõi quá trình upload
+    const uploadPromise = new Promise((resolve, reject) => {
+      writeStream.on("finish", function (file) {
+        resolve(file);
+      });
+
+      writeStream.on("error", function (error) {
+        console.error("GridFS upload stream error:", error);
+        reject(error);
+      });
+    });
+
+    // Ghi buffer vào GridFS
+    try {
+      writeStream.write(req.file.buffer);
+      writeStream.end();
+    } catch (writeError) {
+      console.error("Error writing to GridFS stream:", writeError);
+      return res.status(500).json({
+        message: "Lỗi khi ghi dữ liệu vào GridFS",
+        error: writeError.message,
+      });
+    }
+
+    // Đợi quá trình upload hoàn tất
+    const file = await uploadPromise;
+
+    console.log("File uploaded to GridFS:", file);
 
     // Tạo URL cho file
-    const serverUrl = `${req.protocol}://${req.get("host")}`;
-    const fileUrl = `${serverUrl}/api/chat/media/${fileId}`;
+    const fileUrl = `${req.protocol}://${req.get("host")}/api/chat/media/${
+      file._id
+    }`;
 
-    // Xử lý thumbnail cho video (có thể bỏ qua trong phiên bản này)
-    let fileThumbnail = null;
+    // Thông tin về file đã upload
+    const fileInfo = {
+      fileName: req.file.originalname || "untitled",
+      fileUrl: fileUrl,
+      fileSize: req.file.size || 0,
+      fileMimeType: req.file.mimetype || "application/octet-stream",
+      fileId: file._id.toString(),
+    };
 
-    console.log("Upload thành công. File ID:", fileId);
-    console.log("File URL:", fileUrl);
-    console.log("File sẽ hết hạn vào:", expiryDate);
+    console.log("File uploaded successfully:", fileInfo);
 
-    res.status(200).json({
+    // Trả về thông tin file đã upload
+    return res.status(200).json({
       message: "Upload thành công",
-      fileUrl,
-      fileId: fileId.toString(),
-      fileName: req.file.originalname,
-      fileSize: req.file.size,
-      fileThumbnail,
-      expiryDate,
+      ...fileInfo,
     });
   } catch (error) {
-    console.error("Error uploading file:", error);
-    res
-      .status(500)
-      .json({ message: "Error uploading file", error: error.message });
+    console.error("Error in uploadFile:", error);
+    return res.status(500).json({
+      message: "Lỗi khi upload file",
+      error: error.message || error,
+    });
   }
 };
 
@@ -222,7 +284,18 @@ const getMedia = async (req, res) => {
     }
 
     // Set header content-type
-    res.set("Content-Type", file.metadata.mimetype);
+    res.set(
+      "Content-Type",
+      file.metadata?.mimetype || "application/octet-stream"
+    );
+
+    // Set tên file gốc cho header Content-Disposition để tải về với tên gốc
+    if (file.metadata?.originalName) {
+      res.set(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(file.metadata.originalName)}"`
+      );
+    }
 
     // Tạo stream để đọc file từ GridFS
     const downloadStream = gfs.openDownloadStream(fileId);

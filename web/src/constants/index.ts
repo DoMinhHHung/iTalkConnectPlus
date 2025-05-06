@@ -1,5 +1,5 @@
 // API endpoints
-export const API_URL = "http://localhost:5000/api";
+export const API_URL = "http://192.168.1.7:3005/api";
 
 // Auth related constants
 export const TOKEN_KEY = "token";

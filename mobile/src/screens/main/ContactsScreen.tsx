@@ -54,8 +54,8 @@ const ContactsScreen = () => {
   const loadFriends = async () => {
     try {
       // Get token from storage
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("No auth token available for loading friends");
         Alert.alert("Error", "Authentication required. Please log in again.");
@@ -65,31 +65,38 @@ const ContactsScreen = () => {
       console.log("Loading friends with token");
       const response = await axios.get(`${API_URL}/api/friendship`, {
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          Authorization: `Bearer ${token}`,
+        },
       });
-      
+
       console.log("Friendship data received:", response.data);
-      
+
       // Transform the friendship data to match expected format
-      const friendsList = response.data.map((friendship: any) => {
-        // Determine which user is the friend (not the current user)
-        const friendData = friendship.requester && friendship.requester._id !== user?._id 
-          ? friendship.requester 
-          : friendship.recipient;
-        
-        // Skip if friend data is missing
-        if (!friendData) return null;
-        
-        return {
-          _id: friendData._id,
-          name: friendData.name || `${friendData.firstName || ''} ${friendData.lastName || ''}`.trim(),
-          email: friendData.email || '',
-          avt: friendData.avt || friendData.avatar || '',
-          isOnline: friendData.isOnline || false
-        };
-      }).filter(Boolean); // Remove any null entries
-      
+      const friendsList = response.data
+        .map((friendship: any) => {
+          // Determine which user is the friend (not the current user)
+          const friendData =
+            friendship.requester && friendship.requester._id !== user?._id
+              ? friendship.requester
+              : friendship.recipient;
+
+          // Skip if friend data is missing
+          if (!friendData) return null;
+
+          return {
+            _id: friendData._id,
+            name:
+              friendData.name ||
+              `${friendData.firstName || ""} ${
+                friendData.lastName || ""
+              }`.trim(),
+            email: friendData.email || "",
+            avt: friendData.avt || friendData.avatar || "",
+            isOnline: friendData.isOnline || false,
+          };
+        })
+        .filter(Boolean); // Remove any null entries
+
       console.log(`Transformed ${friendsList.length} friends`);
       setFriends(friendsList);
     } catch (error) {
@@ -105,8 +112,8 @@ const ContactsScreen = () => {
   const loadPendingRequests = async () => {
     try {
       // Get token from storage
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("No auth token available for loading pending requests");
         return;
@@ -118,72 +125,83 @@ const ContactsScreen = () => {
           `${API_URL}/api/friendship/pending-requests`,
           {
             headers: {
-              'Authorization': `Bearer ${token}`
-            }
+              Authorization: `Bearer ${token}`,
+            },
           }
         );
-        
+
         console.log("Pending requests received:", response.data);
-        
+
         // Transform the pending requests data if needed
         const transformedRequests = response.data.map((request: any) => {
           const requestUser = request.requester || {};
           return {
             _id: requestUser._id,
-            name: requestUser.name || `${requestUser.firstName || ''} ${requestUser.lastName || ''}`.trim(),
-            email: requestUser.email || '',
-            avt: requestUser.avt || requestUser.avatar || '',
+            name:
+              requestUser.name ||
+              `${requestUser.firstName || ""} ${
+                requestUser.lastName || ""
+              }`.trim(),
+            email: requestUser.email || "",
+            avt: requestUser.avt || requestUser.avatar || "",
             // Lưu _id của request để sử dụng khi chấp nhận/từ chối
-            requestId: request._id
+            requestId: request._id,
           };
         });
-        
+
         setPendingRequests(transformedRequests);
-        
+
         // Lưu thông tin trạng thái kết bạn
         const status: Record<string, FriendshipStatus> = {};
         transformedRequests.forEach((user: any) => {
-          status[user._id] = { status: 'pending', _id: user.requestId };
+          status[user._id] = { status: "pending", _id: user.requestId };
         });
-        setFriendshipStatus({...friendshipStatus, ...status});
-        
+        setFriendshipStatus({ ...friendshipStatus, ...status });
+
         return;
       } catch (primaryError) {
         console.error("Failed with primary endpoint:", primaryError);
-        
+
         // Thử endpoint thay thế
         try {
           const response = await axios.get(
             `${API_URL}/api/friendship/requests/received`,
             {
               headers: {
-                'Authorization': `Bearer ${token}`
-              }
+                Authorization: `Bearer ${token}`,
+              },
             }
           );
-          
-          console.log("Pending requests received (alternate endpoint):", response.data);
-          
+
+          console.log(
+            "Pending requests received (alternate endpoint):",
+            response.data
+          );
+
           const transformedRequests = response.data.map((request: any) => {
             const requestUser = request.requester || {};
             return {
               _id: requestUser._id,
-              name: requestUser.name || `${requestUser.firstName || ''} ${requestUser.lastName || ''}`.trim(),
-              email: requestUser.email || '',
-              avt: requestUser.avt || requestUser.avatar || '',
-              requestId: request._id
+              name:
+                requestUser.name ||
+                `${requestUser.firstName || ""} ${
+                  requestUser.lastName || ""
+                }`.trim(),
+              email: requestUser.email || "",
+              avt: requestUser.avt || requestUser.avatar || "",
+              requestId: request._id,
             };
           });
-          
+
           setPendingRequests(transformedRequests);
-          
+
           // Lưu thông tin trạng thái kết bạn
           const status: Record<string, FriendshipStatus> = {};
           transformedRequests.forEach((user: any) => {
-            status[user._id] = { status: 'pending', _id: user.requestId };
+            status[user._id] = { status: "pending", _id: user.requestId };
           });
-          setFriendshipStatus({...friendshipStatus, ...status});
-          
+          setFriendshipStatus({ ...friendshipStatus, ...status });
+
           return;
         } catch (secondaryError) {
           console.error("Failed with alternate endpoint:", secondaryError);
@@ -214,23 +232,23 @@ const ContactsScreen = () => {
 
     try {
       setSearching(true);
-      
+
       // Lấy token xác thực
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("Không có token xác thực");
         Alert.alert("Lỗi", "Vui lòng đăng nhập lại");
         setSearching(false);
         return;
       }
-      
+
       const response = await axios.get(
         `${API_URL}/api/user/search?query=${searchQuery}`,
         {
           headers: {
-            'Authorization': `Bearer ${token}`
-          }
+            Authorization: `Bearer ${token}`,
+          },
         }
       );
 
@@ -245,8 +263,8 @@ const ContactsScreen = () => {
       const statusPromises = filteredResults.map((result: User) =>
         axios.get(`${API_URL}/api/friendship/status/${result._id}`, {
           headers: {
-            'Authorization': `Bearer ${token}`
-          }
+            Authorization: `Bearer ${token}`,
+          },
         })
       );
 
@@ -270,42 +288,46 @@ const ContactsScreen = () => {
   const sendFriendRequest = async (userId: string) => {
     try {
       // Lấy token xác thực
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("Không có token xác thực");
         Alert.alert("Lỗi", "Vui lòng đăng nhập lại");
         return;
       }
-      
+
       console.log("Gửi yêu cầu kết bạn đến:", userId);
       console.log("Token:", token.substring(0, 10) + "...");
-      
+
       // Tạo dữ liệu request
       const requestData = {
         recipientId: userId,
       };
-      
+
       console.log("Request data:", JSON.stringify(requestData));
-      
+
       // Chuẩn bị headers
       const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
       };
-      
+
       console.log("Request headers:", JSON.stringify(headers));
-      
+
       // Thử endpoint chính
       try {
         const response = await axios.post(
-          `${API_URL}/api/friendship/send-request`, 
+          `${API_URL}/api/friendship/send-request`,
           requestData,
           { headers }
         );
-        
-        console.log("API response:", response.status, JSON.stringify(response.data));
-        
+
+        console.log(
+          "API response:",
+          response.status,
+          JSON.stringify(response.data)
+        );
+
         // Update friendship status
         setFriendshipStatus({
           ...friendshipStatus,
@@ -316,17 +338,21 @@ const ContactsScreen = () => {
         return;
       } catch (primaryError) {
         console.error("Lỗi endpoint chính:", primaryError);
-        
+
         // Nếu endpoint chính thất bại, thử endpoint thứ hai
         try {
           const response = await axios.post(
-            `${API_URL}/api/friendship/request`, 
+            `${API_URL}/api/friendship/request`,
             requestData,
             { headers }
           );
-          
-          console.log("API response (endpoint phụ):", response.status, JSON.stringify(response.data));
-          
+
+          console.log(
+            "API response (endpoint phụ):",
+            response.status,
+            JSON.stringify(response.data)
+          );
+
           // Update friendship status
           setFriendshipStatus({
             ...friendshipStatus,
@@ -342,21 +368,29 @@ const ContactsScreen = () => {
       }
     } catch (error) {
       console.error("Failed to send friend request:", error);
-      
+
       // Log chi tiết lỗi
       if (error.response) {
         console.error("Response data:", JSON.stringify(error.response.data));
         console.error("Response status:", error.response.status);
-        console.error("Response headers:", JSON.stringify(error.response.headers));
-        
+        console.error(
+          "Response headers:",
+          JSON.stringify(error.response.headers)
+        );
+
         Alert.alert(
-          "Lỗi", 
-          `Không thể gửi lời mời kết bạn (${error.response.status}): ${JSON.stringify(error.response.data)}`
+          "Lỗi",
+          `Không thể gửi lời mời kết bạn (${
+            error.response.status
+          }): ${JSON.stringify(error.response.data)}`
         );
       } else if (error.request) {
         // Request được gửi nhưng không nhận được response
         console.error("No response received:", error.request);
-        Alert.alert("Lỗi", "Không nhận được phản hồi từ máy chủ. Vui lòng kiểm tra kết nối mạng.");
+        Alert.alert(
+          "Lỗi",
+          "Không nhận được phản hồi từ máy chủ. Vui lòng kiểm tra kết nối mạng."
+        );
       } else {
         // Có lỗi khác khi cài đặt request
         console.error("Error message:", error.message);
@@ -369,65 +403,65 @@ const ContactsScreen = () => {
   const acceptFriendRequest = async (userId: string, requestId: string) => {
     try {
       // Lấy token xác thực
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("Không có token xác thực");
         Alert.alert("Lỗi", "Vui lòng đăng nhập lại");
         return;
       }
-      
+
       console.log("Accepting friend request:", requestId, "from user:", userId);
-      
+
       // Mảng các phương thức API có thể
       const possibleEndpoints = [
         // Endpoint với request body là requestId
         {
           url: `${API_URL}/api/friendship/accept-request`,
-          method: 'post',
-          data: { requestId }
+          method: "post",
+          data: { requestId },
         },
         // Endpoint với request body là friendshipId
         {
           url: `${API_URL}/api/friendship/accept-request`,
-          method: 'post',
-          data: { friendshipId: requestId }
+          method: "post",
+          data: { friendshipId: requestId },
         },
         // Endpoint với ID trong path
         {
           url: `${API_URL}/api/friendship/accept/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint với ID trong path (requests)
         {
           url: `${API_URL}/api/friendship/requests/accept/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint với ID trong path (request)
         {
           url: `${API_URL}/api/friendship/request/accept/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint khác có thể
         {
           url: `${API_URL}/api/friendship/requests/accept`,
-          method: 'post',
-          data: { requestId }
+          method: "post",
+          data: { requestId },
         },
         // Endpoint khác có thể
         {
           url: `${API_URL}/api/friendship/request/accept`,
-          method: 'post',
-          data: { requestId }
-        }
+          method: "post",
+          data: { requestId },
+        },
       ];
 
       // Thử từng endpoint cho đến khi thành công
       let success = false;
-      
+
       for (const endpoint of possibleEndpoints) {
         try {
           console.log(`Đang thử endpoint: ${endpoint.url}`, endpoint.data);
@@ -436,11 +470,11 @@ const ContactsScreen = () => {
             url: endpoint.url,
             data: endpoint.data,
             headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
           });
-          
+
           console.log("API accept response successful:", response.status);
           success = true;
           break;
@@ -448,7 +482,7 @@ const ContactsScreen = () => {
           console.log(`Thất bại với endpoint ${endpoint.url}:`, error.message);
         }
       }
-      
+
       if (!success) {
         console.error("Đã thử tất cả các endpoint nhưng không thành công");
         throw new Error("No endpoint worked");
@@ -465,7 +499,10 @@ const ContactsScreen = () => {
         console.error("Response data:", JSON.stringify(error.response.data));
         console.error("Response status:", error.response.status);
       }
-      Alert.alert("Lỗi", "Không thể chấp nhận lời mời kết bạn. Vui lòng thử lại sau.");
+      Alert.alert(
+        "Lỗi",
+        "Không thể chấp nhận lời mời kết bạn. Vui lòng thử lại sau."
+      );
     }
   };
 
@@ -473,65 +510,65 @@ const ContactsScreen = () => {
   const rejectFriendRequest = async (userId: string, requestId: string) => {
     try {
       // Lấy token xác thực
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("Không có token xác thực");
         Alert.alert("Lỗi", "Vui lòng đăng nhập lại");
         return;
       }
-      
+
       console.log("Rejecting friend request:", requestId, "from user:", userId);
-      
+
       // Mảng các phương thức API có thể
       const possibleEndpoints = [
         // Endpoint với request body là requestId
         {
           url: `${API_URL}/api/friendship/reject-request`,
-          method: 'post',
-          data: { requestId }
+          method: "post",
+          data: { requestId },
         },
         // Endpoint với request body là friendshipId
         {
           url: `${API_URL}/api/friendship/reject-request`,
-          method: 'post',
-          data: { friendshipId: requestId }
+          method: "post",
+          data: { friendshipId: requestId },
         },
         // Endpoint với ID trong path
         {
           url: `${API_URL}/api/friendship/reject/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint với ID trong path (requests)
         {
           url: `${API_URL}/api/friendship/requests/reject/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint với ID trong path (request)
         {
           url: `${API_URL}/api/friendship/request/reject/${requestId}`,
-          method: 'post',
-          data: {}
+          method: "post",
+          data: {},
         },
         // Endpoint khác có thể
         {
           url: `${API_URL}/api/friendship/requests/reject`,
-          method: 'post',
-          data: { requestId }
+          method: "post",
+          data: { requestId },
         },
         // Endpoint khác có thể
         {
           url: `${API_URL}/api/friendship/request/reject`,
-          method: 'post',
-          data: { requestId }
-        }
+          method: "post",
+          data: { requestId },
+        },
       ];
 
       // Thử từng endpoint cho đến khi thành công
       let success = false;
-      
+
       for (const endpoint of possibleEndpoints) {
         try {
           console.log(`Đang thử endpoint: ${endpoint.url}`, endpoint.data);
@@ -540,11 +577,11 @@ const ContactsScreen = () => {
             url: endpoint.url,
             data: endpoint.data,
             headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
           });
-          
+
           console.log("API reject response successful:", response.status);
           success = true;
           break;
@@ -552,7 +589,7 @@ const ContactsScreen = () => {
           console.log(`Thất bại với endpoint ${endpoint.url}:`, error.message);
         }
       }
-      
+
       if (!success) {
         console.error("Đã thử tất cả các endpoint nhưng không thành công");
         throw new Error("No endpoint worked");
@@ -568,7 +605,10 @@ const ContactsScreen = () => {
         console.error("Response data:", JSON.stringify(error.response.data));
         console.error("Response status:", error.response.status);
       }
-      Alert.alert("Lỗi", "Không thể từ chối lời mời kết bạn. Vui lòng thử lại sau.");
+      Alert.alert(
+        "Lỗi",
+        "Không thể từ chối lời mời kết bạn. Vui lòng thử lại sau."
+      );
     }
   };
 
@@ -576,18 +616,18 @@ const ContactsScreen = () => {
   const handleUnfriend = async (userId: string) => {
     try {
       // Lấy token xác thực
-      const token = await AsyncStorage.getItem('token');
-      
+      const token = await AsyncStorage.getItem("token");
+
       if (!token) {
         console.error("Không có token xác thực");
         Alert.alert("Lỗi", "Vui lòng đăng nhập lại");
         return;
       }
-      
+
       await axios.delete(`${API_URL}/api/friendship/unfriend/${userId}`, {
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       // Refresh the friends list
@@ -609,17 +649,47 @@ const ContactsScreen = () => {
   };
 
   // Navigate to chat with a friend
-  const navigateToChat = (contact: User) => {
-    // Create a chat ID from the two user IDs (sorted)
-    const userIds = [user?._id, contact._id].sort();
-    const chatId = `${userIds[0]}_${userIds[1]}`;
+  const navigateToChat = async (contact: User) => {
+    try {
+      // Tạo chat ID từ ID của hai người dùng (đã sắp xếp)
+      const userIds = [user?._id, contact._id].sort();
+      const chatId = `${userIds[0]}_${userIds[1]}`;
 
-    navigation.navigate("ChatDetail", {
-      chatId,
-      chatName: contact.name,
-      contactId: contact._id,
-      contactAvatar: contact.avt,
-    });
+      // Lấy token xác thực
+      const token = await AsyncStorage.getItem("token");
+
+      // Gọi API để tạo/khởi tạo cuộc trò chuyện
+      await axios.post(
+        `${API_URL}/api/chat/initialize`,
+        {
+          participants: [user?._id, contact._id],
+          chatId: chatId,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Chuyển đến màn hình chat
+      navigation.navigate("ChatDetail", {
+        chatId,
+        chatName: contact.name,
+        contactId: contact._id,
+        contactAvatar: contact.avt,
+      });
+    } catch (error) {
+      console.error("Không thể tạo cuộc trò chuyện:", error);
+      // Vẫn chuyển hướng ngay cả khi lỗi để tránh làm gián đoạn UX
+      navigation.navigate("ChatDetail", {
+        chatId: `${user?._id}_${contact._id}`.split("").sort().join(""),
+        chatName: contact.name,
+        contactId: contact._id,
+        contactAvatar: contact.avt,
+      });
+    }
   };
 
   // View a user's profile
@@ -776,7 +846,7 @@ const ContactsScreen = () => {
             style={styles.addButton}
             onPress={() => {
               console.log("Đã bấm nút kết bạn với:", item._id, item.name);
-              
+
               // Thêm thời gian trễ nhỏ để đảm bảo animation hiển thị trước khi gọi API
               setTimeout(() => {
                 sendFriendRequest(item._id);

@@ -38,6 +38,7 @@ import {
   incrementUnreadMessages,
   resetUnreadMessages,
 } from "../redux/slices/messageSlice";
+import { API_URL } from "../constants";
 
 const ChatInterface: React.FC = () => {
   const { friendId } = useParams<{ friendId: string }>();
@@ -722,6 +723,13 @@ const ChatInterface: React.FC = () => {
       else if (file.type.startsWith("video/")) fileType = "video";
       else if (file.type.startsWith("audio/")) fileType = "audio";
 
+      // Tạo token cho request
+      const token = localStorage.getItem("token");
+      if (!token) {
+        console.error("No token available");
+        return;
+      }
+
       // Tạo form data để upload
       const formData = new FormData();
       formData.append("file", file);
@@ -729,29 +737,26 @@ const ChatInterface: React.FC = () => {
       formData.append("senderId", user._id);
       formData.append("receiverId", friendId);
 
-      // Upload file lên server
-      const response = await axios.post(
-        "http://localhost:3005/api/chat/upload",
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          onUploadProgress: (progressEvent) => {
-            if (progressEvent.total) {
-              const percentCompleted = Math.round(
-                (progressEvent.loaded * 100) / progressEvent.total
-              );
-              setUploadProgress(percentCompleted);
-            }
-          },
-        }
-      );
+      // Upload file lên server với header phù hợp
+      const response = await axios.post(`${API_URL}/chat/upload`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${token}`,
+        },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            setUploadProgress(percentCompleted);
+          }
+        },
+      });
+
+      console.log("File upload response:", response.data);
 
       // Lấy URL file đã upload
-      const { fileUrl, fileName, fileThumbnail, fileId, expiryDate } =
-        response.data;
+      const { fileUrl, fileName, fileThumbnail, fileId } = response.data;
 
       // Tạo ID tạm thời cho tin nhắn
       const tempId = Date.now().toString();
@@ -770,7 +775,6 @@ const ChatInterface: React.FC = () => {
         fileSize: file.size,
         fileThumbnail,
         fileId,
-        expiryDate,
         chatType: "private",
         ...(replyToMessage
           ? {
@@ -798,7 +802,6 @@ const ChatInterface: React.FC = () => {
         fileSize: file.size,
         fileThumbnail,
         fileId,
-        expiryDate,
         chatType: "private",
         ...(replyToMessage ? { replyToId: replyToMessage._id } : {}),
       });
@@ -809,6 +812,7 @@ const ChatInterface: React.FC = () => {
       e.target.value = "";
     } catch (error) {
       console.error("Error uploading file:", error);
+      alert("Lỗi: Không thể tải lên file. Vui lòng thử lại.");
     } finally {
       setIsUploading(false);
       setUploadProgress(0);

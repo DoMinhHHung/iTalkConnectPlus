@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect } from "react";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from "../config/constants";
+import { findWorkingApiUrl, getCurrentApiUrl, getAuthApiInstance, getApiInstance } from "../utils/apiHelper";
 
 // Define types for the context
 type User = {
@@ -20,6 +21,8 @@ type AuthContextType = {
   user: User | null;
   token: string | null;
   isLoading: boolean;
+  apiConnected: boolean;
+  apiBaseUrl: string;
   login: (credentials: {
     emailOrPhone: string;
     password: string;
@@ -28,6 +31,7 @@ type AuthContextType = {
   logout: () => Promise<void>;
   updateUser: (userData: Partial<User>) => Promise<void>;
   isAuthenticated: boolean;
+  retryConnection: () => Promise<boolean>;
 };
 
 // Create the context
@@ -35,11 +39,14 @@ export const AuthContext = createContext<AuthContextType>({
   user: null,
   token: null,
   isLoading: true,
+  apiConnected: false,
+  apiBaseUrl: API_URL,
   login: async () => {},
   register: async () => {},
   logout: async () => {},
   updateUser: async () => {},
   isAuthenticated: false,
+  retryConnection: async () => false,
 });
 
 // Create the provider
@@ -49,10 +56,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [apiConnected, setApiConnected] = useState(false);
+  const [apiBaseUrl, setApiBaseUrl] = useState(API_URL);
 
-  // Check if the user is logged in (on app start)
+  // Kiểm tra kết nối API và tải dữ liệu người dùng khi khởi động
   useEffect(() => {
-    loadStoredAuthData();
+    const initialize = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Thử tìm API URL hoạt động
+        const workingUrl = await findWorkingApiUrl();
+        if (workingUrl) {
+          setApiConnected(true);
+          setApiBaseUrl(workingUrl);
+          console.log(`Using API URL: ${workingUrl}`);
+          
+          // Tải dữ liệu người dùng
+          await loadStoredAuthData();
+        } else {
+          setApiConnected(false);
+          console.error("Could not connect to any API server");
+          setIsLoading(false);
+        }
+      } catch (error) {
+        console.error("Initialization error:", error);
+        setApiConnected(false);
+        setIsLoading(false);
+      }
+    };
+    
+    initialize();
   }, []);
 
   // Configure axios with the token
@@ -80,6 +114,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // Thử kết nối lại với API
+  const retryConnection = async (): Promise<boolean> => {
+    try {
+      setIsLoading(true);
+      const workingUrl = await findWorkingApiUrl();
+      
+      if (workingUrl) {
+        setApiConnected(true);
+        setApiBaseUrl(workingUrl);
+        await loadStoredAuthData();
+        return true;
+      } else {
+        setApiConnected(false);
+        return false;
+      }
+    } catch (error) {
+      console.error("Retry connection error:", error);
+      setApiConnected(false);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Login function
   const login = async (credentials: {
     emailOrPhone: string;
@@ -87,10 +145,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }) => {
     try {
       setIsLoading(true);
-      const response = await axios.post(
-        `${API_URL}/api/auth/login`,
-        credentials
-      );
+      
+      // Kiểm tra kết nối trước khi đăng nhập
+      if (!apiConnected) {
+        const connected = await retryConnection();
+        if (!connected) {
+          throw new Error("No API connection available");
+        }
+      }
+      
+      // Sử dụng API instance từ helper
+      const api = await getApiInstance();
+      const response = await api.post(`/api/auth/login`, credentials);
+      
       const { user, token } = response.data;
 
       // Store user and token
@@ -111,10 +178,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const register = async (userData: any) => {
     try {
       setIsLoading(true);
-      const response = await axios.post(
-        `${API_URL}/api/auth/register`,
-        userData
-      );
+      
+      // Kiểm tra kết nối trước khi đăng ký
+      if (!apiConnected) {
+        const connected = await retryConnection();
+        if (!connected) {
+          throw new Error("No API connection available");
+        }
+      }
+      
+      // Sử dụng API instance từ helper
+      const api = await getApiInstance();
+      const response = await api.post(`/api/auth/register`, userData);
+      
       const { user, token } = response.data;
 
       // Store user and token
@@ -152,16 +228,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const updateUser = async (userData: Partial<User>) => {
     try {
       if (!user || !user._id) throw new Error("User not authenticated");
-
-      const response = await axios.put(
-        `${API_URL}/api/user/update/${user._id}`,
-        userData,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
-      );
+      
+      // Sử dụng API instance từ helper
+      const api = await getAuthApiInstance();
+      const response = await api.put(`/api/user/update/${user._id}`, userData);
+      
       const updatedUser = response.data.user;
 
       // Update stored user data
@@ -179,11 +250,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         user,
         token,
         isLoading,
+        apiConnected,
+        apiBaseUrl,
         login,
         register,
         logout,
         updateUser,
         isAuthenticated: !!user && !!token,
+        retryConnection,
       }}
     >
       {children}
