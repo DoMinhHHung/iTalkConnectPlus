@@ -6,18 +6,16 @@ import ReactDOM from "react-dom";
 // Interfaces
 export interface Message {
   _id: string;
-  sender: string | { _id: string; name?: string; avt?: string };
-  receiver: string;
+  sender: string | User;
+  receiver: string | User;
   content: string;
   createdAt: string;
-  status?: "sent" | "delivered" | "seen";
-  reactions?: {
-    [userId: string]: string;
-  };
+  status?: "pending" | "sent" | "delivered" | "seen" | "failed";
+  chatType?: "private" | "group";
   replyTo?: {
     _id: string;
     content: string;
-    sender: string | { _id: string; name?: string; avt?: string };
+    sender: string | User;
   };
   type?: "text" | "image" | "video" | "audio" | "file" | "system";
   fileUrl?: string;
@@ -27,16 +25,28 @@ export interface Message {
   fileId?: string;
   expiryDate?: string;
   fileExpired?: boolean;
+  isUnsent?: boolean;
   unsent?: boolean;
-  _tempId?: string; // ID tạm thời cho tin nhắn mới gửi
-  chatType?: "private" | "group"; // Loại chat (riêng tư hoặc nhóm)
+  reactions?: Record<string, string>;
+  _tempId?: string; // Legacy temporary ID format
+  tempId?: string;  // New temporary ID format for compatibility with mobile
 }
+
+// Alias cho kiểu Message mới hơn có thể thay thế dần
+export interface ChatMessage extends Message {}
 
 export interface Friend {
   _id: string;
   name: string;
   avt?: string;
   isOnline?: boolean;
+}
+
+export interface User {
+  _id: string;
+  name?: string;
+  avt?: string;
+  email?: string;
 }
 
 export interface EmojiOption {
@@ -82,16 +92,20 @@ export const formatFileSize = (bytes: number): string => {
 };
 
 // Render functions
-export const renderMessageStatus = (status?: "sent" | "delivered" | "seen") => {
+export const renderMessageStatus = (status?: "pending" | "sent" | "delivered" | "seen" | "failed") => {
   if (!status) return null;
 
   switch (status) {
+    case "pending":
+      return <span className="message-status">Đang gửi...</span>;
     case "sent":
       return <span className="message-status">Đã gửi</span>;
     case "delivered":
       return <span className="message-status">Đã nhận</span>;
     case "seen":
       return <span className="message-status seen">Đã xem</span>;
+    case "failed":
+      return <span className="message-status failed">Lỗi gửi</span>;
     default:
       return null;
   }

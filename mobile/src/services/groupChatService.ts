@@ -280,6 +280,12 @@ export const createGroup = async (groupData: {
       return null;
     }
     
+    console.log('Creating group with data:', JSON.stringify({
+      name: groupData.name,
+      members: `${groupData.members.length} members`,
+      description: groupData.description
+    }));
+    
     const response = await axios.post(
       `${API_URL}/api/groups/create`,
       groupData,
@@ -288,13 +294,38 @@ export const createGroup = async (groupData: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        timeout: 10000, // 10 second timeout
       }
     );
     
+    console.log('Group creation response:', response.status);
+    console.log('Group data received:', response.data?.group?._id ? 'Valid group with ID' : 'Invalid group data');
+    
     return response.data.group;
-  } catch (error) {
-    console.error('Error creating group:', error);
-    return null;
+  } catch (error: any) {
+    console.error('Error creating group:', error.message);
+    
+    // Log more detailed error information
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('Server error response:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers,
+      });
+      
+      // If server returned a message, use it
+      if (error.response.data && error.response.data.message) {
+        throw new Error(error.response.data.message);
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('No response received:', error.request);
+      throw new Error('Network error: No response from server');
+    } 
+    
+    throw error;
   }
 };
 

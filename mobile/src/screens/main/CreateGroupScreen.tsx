@@ -46,7 +46,6 @@ const CreateGroupScreen: React.FC = () => {
     try {
       setLoadingContacts(true);
       
-      // Get token from storage
       const token = await AsyncStorage.getItem('token');
       
       if (!token) {
@@ -55,21 +54,99 @@ const CreateGroupScreen: React.FC = () => {
         return;
       }
       
-      // Get contacts
-      const response = await axios.get(`${API_URL}/api/friends`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      console.log('CreateGroupScreen: API_URL =', API_URL);
       
-      if (response.data && Array.isArray(response.data)) {
-        setContacts(response.data);
+      // First attempt with axios
+      try {
+        console.log('Attempting to load contacts with axios');
+        const response = await axios.get(`${API_URL}/api/friendship`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          timeout: 10000, // 10 second timeout
+        });
+        
+        console.log('Axios request successful, response status:', response.status);
+        
+        const data = response.data;
+        processContactsData(data);
+        
+      } catch (axiosError: any) {
+        console.error('Axios request failed:', axiosError.message);
+        console.log('Response data if available:', axiosError.response?.data);
+        console.log('Response status if available:', axiosError.response?.status);
+        
+        // Fall back to fetch API as a second attempt
+        try {
+          console.log('Falling back to fetch API');
+          const headers = {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          };
+          
+          const response = await fetch(`${API_URL}/api/friendship`, {
+            method: 'GET',
+            headers: headers
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const data = await response.json();
+          processContactsData(data);
+          
+        } catch (fetchError) {
+          console.error('Fetch API also failed:', fetchError);
+          
+          // Use hardcoded data for testing if everything else fails
+          if (contacts.length === 0) {
+            console.log('Using hardcoded test data as last resort');
+            setContacts([]);
+            Alert.alert(
+              'Network Issue', 
+              'Could not load contacts. Please check your connection and try again.'
+            );
+          }
+        }
       }
     } catch (error) {
-      console.error('Failed to load contacts:', error);
-      Alert.alert('Error', 'Failed to load contacts.');
+      console.error('Error in loadContacts:', error);
+      setContacts([]);
     } finally {
       setLoadingContacts(false);
+    }
+  };
+  
+  // Helper function to process contacts data
+  const processContactsData = (data: any) => {
+    console.log('Received data:', Array.isArray(data) ? `${data.length} items` : 'not an array');
+    
+    if (Array.isArray(data) && data.length > 0) {
+      // Transform friendship data
+      const contactsList = data
+        .filter(friendship => friendship.status === 'accepted')
+        .map(friendship => {
+          // Determine which user is the friend
+          const friendData = friendship.requester?._id === user?._id 
+            ? friendship.recipient 
+            : friendship.requester;
+            
+          return {
+            _id: friendData?._id || '',
+            name: friendData?.name || 'Unknown',
+            email: friendData?.email || '',
+            avt: friendData?.avt || ''
+          };
+        })
+        .filter(contact => contact._id); // Filter out any invalid contacts
+      
+      console.log(`Transformed ${contactsList.length} contacts from friendships`);
+      setContacts(contactsList);
+    } else {
+      console.log('No valid friendship data found');
+      setContacts([]);
     }
   };
 
@@ -89,6 +166,10 @@ const CreateGroupScreen: React.FC = () => {
       
       const memberIds = selectedContacts.map(contact => contact._id);
       
+      // Log what we're trying to create
+      console.log(`Creating group "${groupName}" with ${memberIds.length} members`);
+      console.log('Member IDs:', JSON.stringify(memberIds));
+      
       const groupData = {
         name: groupName.trim(),
         description: groupDescription.trim(),
@@ -97,15 +178,25 @@ const CreateGroupScreen: React.FC = () => {
 
       const newGroup = await createGroup(groupData);
       
-      if (newGroup) {
+      if (newGroup && newGroup._id) {
+        console.log('Group created successfully with ID:', newGroup._id);
         Alert.alert('Success', 'Group created successfully');
-        navigation.goBack();
+        navigation.navigate('GroupChat', {
+          groupId: newGroup._id,
+          groupName: newGroup.name
+        });
       } else {
-        throw new Error('Failed to create group');
+        throw new Error('Server returned invalid group data');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create group:', error);
-      Alert.alert('Error', 'Failed to create group. Please try again.');
+      
+      // Provide a more helpful error message
+      const errorMessage = error.message && error.message !== 'Network Error' 
+        ? error.message 
+        : 'Failed to create group. Please check your connection and try again.';
+      
+      Alert.alert('Error', errorMessage);
     } finally {
       setLoading(false);
     }

@@ -1154,36 +1154,14 @@ const ChatScreen = () => {
 
   // Add renderGroupChatItem function
   const renderGroupChatItem = ({ item }: { item: any }) => {
-    // Format timestamp
-    const timestamp = formatMessageTime(item.updatedAt);
-
-    // Get last message content with type consideration
-    let lastMessageContent = "No messages yet";
-    if (item.lastMessage) {
-      if (item.lastMessage.type === "image") {
-        lastMessageContent = "📷 Photo";
-      } else if (item.lastMessage.type === "file") {
-        lastMessageContent =
-          "📎 File: " + (item.lastMessage.fileName || "Document");
-      } else if (item.lastMessage.type === "audio") {
-        lastMessageContent = "🎵 Audio";
-      } else if (item.lastMessage.type === "video") {
-        lastMessageContent = "🎬 Video";
-      } else {
-        lastMessageContent = item.lastMessage.content || "New message";
-      }
-    }
-
     return (
       <TouchableOpacity
         style={styles.chatItem}
         onPress={() => {
-          navigation.navigate("ChatDetail", {
-            chatId: item.id,
-            chatName: item.groupName || "Group Chat",
-            contactId: item.id,
-            isGroup: true,
-            contactAvatar: item.groupAvatar || "",
+          // Navigate to GroupChat screen instead of ChatDetail
+          navigation.navigate('GroupChat', {
+            groupId: item.id,
+            groupName: item.groupName || 'Group Chat'
           });
         }}
       >
@@ -1204,7 +1182,7 @@ const ChatScreen = () => {
             <Text style={styles.chatName} numberOfLines={1}>
               {item.groupName || "Group Chat"}
             </Text>
-            <Text style={styles.timestamp}>{timestamp}</Text>
+            <Text style={styles.timestamp}>{formatMessageTime(item.updatedAt)}</Text>
           </View>
 
           <View style={styles.lastMessageContainer}>
@@ -1215,7 +1193,7 @@ const ChatScreen = () => {
               ]}
               numberOfLines={1}
             >
-              {lastMessageContent}
+              {item.lastMessage?.content || "No messages yet"}
             </Text>
 
             {item.unreadCount > 0 && (

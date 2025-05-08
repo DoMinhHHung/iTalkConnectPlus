@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import ReactDOM from "react-dom";
 import { io, Socket } from "socket.io-client";
 import axios from "axios";
-import "../scss/GroupChatInterface.scss";
 import { useParams } from "react-router-dom";
 import { useAppSelector, useAppDispatch } from "../redux/hooks";
+import "../scss/GroupChatInterface.scss";
 import {
   incrementUnreadGroupMessages,
   resetUnreadGroupMessages,
@@ -54,6 +54,7 @@ import {
 } from "./GroupChatTypes";
 
 import CoAdminDialog from "./CoAdminDialog";
+import { API_URL, API_ENDPOINT, SOCKET_URL, SOCKET_OPTIONS } from "../constants";
 
 // Thêm component AlertDialog để hiển thị thông báo
 const AlertDialog: React.FC<{
@@ -191,6 +192,57 @@ const GroupChatInterface: React.FC = () => {
 
   const dispatch = useAppDispatch();
 
+  // Track processed messages to avoid duplicates
+  const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
+  
+  // Function to check and register a message ID to avoid duplicates
+  const registerMessageId = useCallback((messageId: string, content: string, sender: any): boolean => {
+    // Create a unique signature combining multiple properties to better detect duplicates
+    const messageSignature = `${messageId}:${content}:${typeof sender === 'object' ? sender._id : sender}`;
+    
+    if (processedMessageIds.has(messageSignature) || processedMessageIds.has(messageId)) {
+      console.log(`Message already processed, skipping: ${messageId}`);
+      return false;
+    }
+    
+    setProcessedMessageIds(prev => {
+      const updated = new Set(prev);
+      updated.add(messageSignature);
+      updated.add(messageId);
+      // Keep set size manageable to avoid memory issues
+      if (updated.size > 200) {
+        const iterator = updated.values();
+        updated.delete(iterator.next().value);
+      }
+      return updated;
+    });
+    
+    return true;
+  }, [processedMessageIds]);
+
+  // Enhanced function to check if a message already exists in the UI
+  const isMessageDuplicate = useCallback((newMessage: any): boolean => {
+    // Generate a unique identifier for this message
+    const messageId = newMessage._id;
+    const tempId = newMessage.tempId || newMessage._tempId;
+    const content = newMessage.content;
+    const sender = typeof newMessage.sender === 'object' ? newMessage.sender._id : newMessage.sender;
+    const timestamp = new Date(newMessage.createdAt).getTime();
+    
+    // Check if this message is already in our messages list
+    return messages.some(msg => 
+      // Check by ID
+      msg._id === messageId || 
+      // Check by tempId
+      (tempId && (msg._id === tempId || (msg.tempId && (msg.tempId === tempId)))) ||
+      // Check by content, sender and approximate timestamp (within 5 seconds)
+      (msg.content === content && 
+       ((typeof msg.sender === 'object' && msg.sender._id === sender) ||
+        (typeof msg.sender === 'string' && msg.sender === sender)) &&
+       Math.abs(new Date(msg.createdAt).getTime() - timestamp) < 5000)
+    );
+  }, [messages]);
+
   // Add toast functionality
   const showToast = (
     message: string,
@@ -246,7 +298,7 @@ const GroupChatInterface: React.FC = () => {
       const token = localStorage.getItem("token");
 
       const groupResponse = await axios.get(
-        `http://localhost:3005/api/groups/${groupId}`,
+        `${API_ENDPOINT}/groups/${groupId}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -268,7 +320,7 @@ const GroupChatInterface: React.FC = () => {
       }
 
       const messagesResponse = await axios.get(
-        `http://localhost:3005/api/groups/${groupId}/messages`,
+        `${API_ENDPOINT}/groups/${groupId}/messages`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -294,47 +346,132 @@ const GroupChatInterface: React.FC = () => {
     fetchGroupInfo();
   }, [groupId, user]);
 
+  // Khởi tạo socket
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (!token || !user || !groupId) return;
+    if (!token || !user) return;
 
-    const newSocket = io("http://localhost:3005", {
+    console.log("Khởi tạo socket cho chat nhóm");
+    
+    // Khởi tạo socket với địa chỉ server và cấu hình tự kết nối lại
+    const newSocket = io(SOCKET_URL, {
       auth: {
         token,
       },
+      ...SOCKET_OPTIONS
     });
+
+    console.log("Socket initializing with options:", SOCKET_OPTIONS);
+    console.log("Socket connecting to URL:", SOCKET_URL);
 
     setSocket(newSocket);
 
-    newSocket.emit("joinGroupRoom", groupId);
-
-    newSocket.on("onlineUsers", (userIds: string[]) => {
-      setOnlineUsers(new Set(userIds));
+    // Xử lý kết nối và lỗi socket
+    newSocket.on("connect", () => {
+      console.log("Socket đã kết nối thành công với ID:", newSocket.id);
+      
+      // Tham gia phòng người dùng
+      newSocket.emit("joinUserRoom", { userId: user._id });
+      console.log("Đã tham gia phòng người dùng:", user._id);
+      
+      if (groupId) {
+        // Format room ID properly to match mobile format
+        const roomId = `group:${groupId}`;
+        
+        // Join with exact format for room ID
+        newSocket.emit("joinRoom", { roomId: roomId });
+        console.log("Đã tham gia phòng nhóm với joinRoom:", roomId);
+        
+        // Join with explicit group room - mirroring mobile format exactly
+        newSocket.emit("joinGroupRoom", { groupId: groupId });
+        console.log("Đã tham gia phòng nhóm với joinGroupRoom:", groupId);
+        
+        // Request missed messages with consistent format
+        newSocket.emit("requestMissedMessages", {
+          roomId: roomId,
+          isGroup: true
+        });
+        console.log("Đã yêu cầu tin nhắn nhỡ cho nhóm:", roomId);
+      }
     });
 
-    newSocket.on("userOnline", (userId: string) => {
-      setOnlineUsers((prev) => {
-        const newSet = new Set(prev);
-        newSet.add(userId);
-        return newSet;
-      });
+    newSocket.on("connect_error", (error) => {
+      console.error("Lỗi kết nối socket:", error.message);
+      // Try to reconnect after a delay
+      setTimeout(() => {
+        if (!newSocket.connected) {
+          console.log("Đang thử kết nối lại socket...");
+          newSocket.connect();
+        }
+      }, 3000);
     });
 
-    newSocket.on("userOffline", (userId: string) => {
-      setOnlineUsers((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(userId);
-        return newSet;
-      });
-
-      setTypingUsers((prev) => {
-        const newMap = new Map(prev);
-        newMap.delete(userId);
-        return newMap;
-      });
+    newSocket.on("disconnect", (reason) => {
+      console.log("Socket bị ngắt kết nối:", reason);
+      // If the disconnection is not from a deliberate disconnect call
+      if (reason === 'io server disconnect') {
+        // the disconnection was initiated by the server, reconnect manually
+        setTimeout(() => {
+          console.log("Đang thử kết nối lại sau khi server ngắt kết nối...");
+          newSocket.connect();
+        }, 1000);
+      }
+      // else the socket will automatically try to reconnect
     });
 
     newSocket.on("groupMessage", (data: any) => {
+      console.log("Nhận tin nhắn nhóm mới:", data);
+      
+      if (data.groupId !== groupId) {
+        console.log("Tin nhắn không thuộc về nhóm hiện tại, bỏ qua");
+        return;
+      }
+      
+      // Extract IDs for reference
+      const messageId = data._id;
+      const tempId = data._tempId || data.tempId;
+      
+      // First, check if this is updating one of our temp messages
+      const isUpdatingTempMessage = tempId && messages.some(msg => 
+        msg.tempId === tempId || msg._id === tempId
+      );
+      
+      if (isUpdatingTempMessage) {
+        console.log(`Cập nhật tin nhắn tạm thời với ID ${tempId} thành ID thực ${messageId}`);
+        
+        setMessages(prev => prev.map(msg => {
+          // If this message matches our temp ID, update it with server data
+          if (msg.tempId === tempId || msg._id === tempId) {
+            return {
+              ...msg,
+              _id: messageId, 
+              _isSending: false,
+              ...data
+            };
+          }
+          return msg;
+        }));
+        
+        return; // Stop processing if we just updated a temp message
+      }
+      
+      // Next, check if this is a truly new message or a duplicate
+      const isDuplicate = messages.some(msg => 
+        msg._id === messageId || 
+        (msg.content === data.content && 
+         ((typeof msg.sender === 'object' && typeof data.sender === 'object' && msg.sender._id === data.sender._id) ||
+          (typeof msg.sender === 'string' && typeof data.sender === 'string' && msg.sender === data.sender)) &&
+         Math.abs(new Date(msg.createdAt).getTime() - new Date(data.createdAt).getTime()) < 5000)
+      );
+      
+      if (isDuplicate) {
+        console.log(`Tin nhắn ${messageId} đã tồn tại trong danh sách, bỏ qua`);
+        return;
+      }
+      
+      // At this point, we have a genuinely new message - register and add it
+      console.log(`Thêm tin nhắn nhóm mới: ${messageId}`);
+      
       const newMessage: GroupMessage = {
         _id: data._id,
         sender: data.sender,
@@ -359,34 +496,83 @@ const GroupChatInterface: React.FC = () => {
         ...(data.fileThumbnail ? { fileThumbnail: data.fileThumbnail } : {}),
         ...(data.fileId ? { fileId: data.fileId } : {}),
         ...(data.expiryDate ? { expiryDate: data.expiryDate } : {}),
+        ...(data.tempId || data._tempId ? { tempId: data.tempId || data._tempId } : {}),
       };
 
-      const isFromCurrentUser =
-        typeof data.sender === "string"
-          ? data.sender === user?._id
-          : data.sender._id === user?._id;
+      setMessages((prev) => [...prev, newMessage]);
+    });
 
-      const isCurrentGroup = data.groupId === groupId;
-
-      if (isFromCurrentUser) {
-        setMessages((prev) => [...prev, newMessage]);
-      } else {
-        if (isCurrentGroup) {
-          setMessages((prev) => [...prev, newMessage]);
-        } else {
-          dispatch(incrementUnreadGroupMessages());
-        }
+    // Also handle receiveGroupMessage the same way
+    newSocket.on("receiveGroupMessage", (data: any) => {
+      if (data.groupId !== groupId) {
+        return;
       }
-
-      if (data._tempId) {
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg._id === data._tempId
-              ? { ...newMessage, _tempId: data._tempId }
-              : msg
-          )
-        );
+      
+      // Extract IDs for reference
+      const messageId = data._id;
+      const tempId = data._tempId || data.tempId;
+      
+      // First, check if this is updating one of our temp messages
+      const isUpdatingTempMessage = tempId && messages.some(msg => 
+        msg.tempId === tempId || msg._id === tempId
+      );
+      
+      if (isUpdatingTempMessage) {
+        console.log(`Cập nhật tin nhắn tạm thời với ID ${tempId} thành ID thực ${messageId} (receiveGroupMessage)`);
+        
+        setMessages(prev => prev.map(msg => {
+          // If this message matches our temp ID, update it with server data
+          if (msg.tempId === tempId || msg._id === tempId) {
+            return {
+              ...msg,
+              _id: messageId,
+              _isSending: false,
+              ...data
+            };
+          }
+          return msg;
+        }));
+        
+        return; // Stop processing if we just updated a temp message
       }
+      
+      // Next, check if this is a truly new message or a duplicate
+      const isDuplicate = messages.some(msg => 
+        msg._id === messageId || 
+        (msg.content === data.content && 
+         ((typeof msg.sender === 'object' && typeof data.sender === 'object' && msg.sender._id === data.sender._id) ||
+          (typeof msg.sender === 'string' && typeof data.sender === 'string' && msg.sender === data.sender)) &&
+         Math.abs(new Date(msg.createdAt).getTime() - new Date(data.createdAt).getTime()) < 5000)
+      );
+      
+      if (isDuplicate) {
+        console.log(`Tin nhắn ${messageId} đã tồn tại trong danh sách, bỏ qua (receiveGroupMessage)`);
+        return;
+      }
+      
+      // At this point, we have a genuinely new message - register and add it
+      console.log(`Thêm tin nhắn nhóm mới từ receiveGroupMessage: ${messageId}`);
+      
+      const newMessage: GroupMessage = {
+        _id: data._id,
+        sender: data.sender,
+        groupId: data.groupId,
+        content: data.content,
+        createdAt: data.createdAt,
+        chatType: "group",
+        receiver: "",
+        ...(data.replyTo ? { replyTo: data.replyTo } : {}),
+        ...(data.type ? { type: data.type } : {}),
+        ...(data.fileUrl ? { fileUrl: data.fileUrl } : {}),
+        ...(data.fileName ? { fileName: data.fileName } : {}),
+        ...(data.fileSize ? { fileSize: data.fileSize } : {}),
+        ...(data.fileThumbnail ? { fileThumbnail: data.fileThumbnail } : {}),
+        ...(data.fileId ? { fileId: data.fileId } : {}),
+        ...(data.expiryDate ? { expiryDate: data.expiryDate } : {}),
+        ...(data._tempId ? { tempId: data._tempId } : {}),
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
     });
 
     newSocket.on(
@@ -517,10 +703,140 @@ const GroupChatInterface: React.FC = () => {
       }
     );
 
+    // Xử lý các sự kiện trạng thái người dùng
+    newSocket.on("onlineUsers", (userIds: string[]) => {
+      console.log("Danh sách người dùng online:", userIds);
+      setOnlineUsers(new Set(userIds));
+    });
+
+    newSocket.on("userOnline", (userId: string) => {
+      console.log("Người dùng online:", userId);
+      setOnlineUsers((prev) => {
+        const newSet = new Set(prev);
+        newSet.add(userId);
+        return newSet;
+      });
+    });
+
+    newSocket.on("userOffline", (userId: string) => {
+      console.log("Người dùng offline:", userId);
+      setOnlineUsers((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(userId);
+        return newSet;
+      });
+
+      setTypingUsers((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(userId);
+        return newMap;
+      });
+    });
+
+    // Thêm cơ chế polling định kỳ làm dự phòng
+    const fetchMessagesInterval = setInterval(async () => {
+      if (!groupId || !user) return;
+      
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) return;
+        
+        // Lấy tin nhắn mới nhất từ server
+        const response = await axios.get(
+          `${API_ENDPOINT}/groups/${groupId}/messages`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        
+        if (response.data && response.data.length > 0) {
+          // So sánh với tin nhắn hiện có để chỉ thêm tin nhắn mới
+          setMessages((currentMessages) => {
+            const existingIds = new Set(currentMessages.map(msg => msg._id));
+            const newMessages = response.data.filter((msg: GroupMessage) => !existingIds.has(msg._id));
+            
+            if (newMessages.length > 0) {
+              console.log(`Tìm thấy ${newMessages.length} tin nhắn nhóm mới qua polling`);
+              return [...currentMessages, ...newMessages];
+            }
+            
+            return currentMessages;
+          });
+        }
+      } catch (error) {
+        console.error("Lỗi khi poll tin nhắn nhóm:", error);
+      }
+    }, 10000); // Poll mỗi 10 giây
+
+    // Add handler for general messages to support mobile
+    newSocket.on("message", (data: any) => {
+      // Only handle group messages
+      if (!data.chatType || data.chatType !== "group" || !data.groupId || data.groupId !== groupId) {
+        return;
+      }
+      
+      console.log("Received general message event:", data);
+      
+      // Process the message similar to groupMessage
+      const messageUniqueId = data._id || data.tempId || `${data.sender}-${data.createdAt}-${data.content.substring(0, 10)}`;
+      
+      // Check if we've already processed this message
+      if (!registerMessageId(messageUniqueId, data.content, data.sender)) {
+        return;
+      }
+      
+      // Check if this is updating an existing message
+      const existingMessageIndex = messages.findIndex(msg => 
+        msg._id === data.tempId || 
+        (msg.tempId && msg.tempId === data.tempId) || 
+        msg._id === data._id
+      );
+      
+      if (existingMessageIndex >= 0) {
+        // Update existing message
+        console.log("Updating existing message:", messages[existingMessageIndex]._id, "->", data._id);
+        setMessages(prev => {
+          const updated = [...prev];
+          updated[existingMessageIndex] = {
+            ...updated[existingMessageIndex],
+            _id: data._id || updated[existingMessageIndex]._id,
+            ...(data.status ? { status: data.status } : {})
+          };
+          return updated;
+        });
+      } else {
+        // Add as new message
+        const newMessage: GroupMessage = {
+          _id: data._id,
+          sender: data.sender,
+          groupId: data.groupId,
+          content: data.content,
+          createdAt: data.createdAt || new Date().toISOString(),
+          chatType: "group",
+          receiver: "",
+          ...(data.type ? { type: data.type } : {}),
+          ...(data.tempId ? { tempId: data.tempId } : {}),
+          // Include other fields as needed
+        };
+        
+        console.log("Adding new message from 'message' event:", newMessage._id);
+        setMessages(prev => [...prev, newMessage]);
+      }
+    });
+
     return () => {
-      newSocket.disconnect();
+      console.log("Dọn dẹp kết nối socket chat nhóm");
+      if (newSocket) {
+        // Rời khỏi các phòng
+        if (groupId) {
+          newSocket.emit("leaveGroupRoom", { groupId });
+          console.log("Đã rời phòng nhóm:", groupId);
+        }
+        newSocket.disconnect();
+      }
+      clearInterval(fetchMessagesInterval);
     };
-  }, [groupId, user, dispatch]);
+  }, [groupId, user, dispatch, registerMessageId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -553,10 +869,71 @@ const GroupChatInterface: React.FC = () => {
     }
   };
 
-  const handleSendMessage = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !socket || !user || !groupId) return;
+  // Helper function to send message via API fallback
+  const sendMessageViaAPI = async (messageData: any, tempId: string) => {
+    try {
+      const token = localStorage.getItem("token");
+      console.log("Sending message via API with tempId:", tempId);
+      
+      const response = await axios.post(
+        `${API_ENDPOINT}/groups/message`,
+        messageData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
+      if (response.data && response.data._id) {
+        console.log("Message saved via API:", response.data._id);
+        
+        // Update the temporary message with the real ID and mark as sent
+        setMessages((prevMessages) =>
+          prevMessages.map((msg) =>
+            msg._id === tempId || (msg.tempId && msg.tempId === tempId)
+              ? { 
+                  ...msg, 
+                  _id: response.data._id, 
+                  _isSending: false,
+                  status: 'sent',
+                  ...response.data  // Copy all server-provided data to ensure latest version
+                }
+              : msg
+          )
+        );
+        
+        // Register the real ID to prevent duplicates if the socket also delivers this message
+        const senderObj = typeof response.data.sender === 'object' 
+          ? response.data.sender._id 
+          : response.data.sender;
+          
+        registerMessageId(
+          response.data._id, 
+          response.data.content, 
+          senderObj
+        );
+      }
+    } catch (apiError) {
+      console.error("Error saving message via API:", apiError);
+      
+      // Mark the temporary message as failed
+      setMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg._id === tempId || (msg.tempId && msg.tempId === tempId)
+            ? { ...msg, _isSending: false, status: 'failed' }
+            : msg
+        )
+      );
+    }
+  };
+
+  const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !user || !groupId) return;
+
+    // Dừng trạng thái đang nhập
     if (socket) {
       socket.emit("stopTypingInGroup", {
         senderId: user._id,
@@ -564,16 +941,25 @@ const GroupChatInterface: React.FC = () => {
       });
     }
 
-    const tempId = Date.now().toString();
+    // Tạo ID tạm thời cho tin nhắn
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const timestamp = new Date().toISOString();
 
+    // Tạo tin nhắn tạm thời để hiển thị ngay lập tức
     const tempMessage: GroupMessage = {
       _id: tempId,
-      sender: user._id,
-      receiver: "",
+      sender: {
+        _id: user._id,
+        name: user.name,
+        avt: user.avt
+      },
+      receiver: "", // Add required receiver property
       groupId: groupId,
       content: newMessage,
-      createdAt: new Date().toISOString(),
+      createdAt: timestamp,
       chatType: "group",
+      tempId: tempId, // Store tempId for deduplication
+      _isSending: true, // Add a flag to indicate this is a temp message still being sent
       ...(replyToMessage
         ? {
             replyTo: {
@@ -585,17 +971,55 @@ const GroupChatInterface: React.FC = () => {
         : {}),
     };
 
+    // Register this temp message in our deduplication system
+    registerMessageId(tempId, newMessage, user._id);
+    
+    // Thêm tin nhắn tạm vào danh sách hiển thị ngay lập tức
     setMessages((prev) => [...prev, tempMessage]);
-
-    socket.emit("sendGroupMessage", {
+    
+    // Tạo dữ liệu gửi đi
+    const messageData = {
+      sender: user._id,
       senderId: user._id,
+      roomId: `group:${groupId}`,
       groupId: groupId,
       content: newMessage,
-      tempId,
+      tempId, // Include tempId for deduplication
+      timestamp: timestamp, // Include creation timestamp
+      type: "text",
       chatType: "group",
-      ...(replyToMessage ? { replyToId: replyToMessage._id } : {}),
-    });
+      ...(replyToMessage
+        ? { replyToId: replyToMessage._id }
+        : {})
+    };
 
+    // Track if we've successfully sent the message
+    let messageSent = false;
+
+    // Check if socket is connected first
+    if (socket && socket.connected) {
+      try {
+        console.log("Socket connected, sending message via socket only");
+        
+        // Only send via ONE socket event to avoid duplication
+        // Use "sendGroupMessage" as primary method since it's more specific
+        socket.emit("sendGroupMessage", messageData);
+        
+        messageSent = true;
+      } catch (socketError) {
+        console.error("Error sending via socket:", socketError);
+      }
+    } else {
+      console.log("Socket not connected, using API fallback");
+    }
+
+    // Only use API as fallback if socket failed, not both
+    if (!messageSent) {
+      console.log("Using API fallback to send message");
+      await sendMessageViaAPI(messageData, tempId);
+    }
+
+    // Reset form
     setNewMessage("");
     setReplyToMessage(null);
     setIsReplying(false);
@@ -620,7 +1044,7 @@ const GroupChatInterface: React.FC = () => {
 
       const token = localStorage.getItem("token");
       const response = await axios.post(
-        "http://localhost:3005/api/chat/upload",
+        `${API_ENDPOINT}/chat/upload`,
         formData,
         {
           headers: {
@@ -671,7 +1095,9 @@ const GroupChatInterface: React.FC = () => {
       setMessages((prev) => [...prev, tempMessage]);
 
       socket.emit("sendGroupMessage", {
+        sender: user._id,
         senderId: user._id,
+        roomId: groupId,
         groupId: groupId,
         content: fileName || file.name,
         tempId,
@@ -730,14 +1156,18 @@ const GroupChatInterface: React.FC = () => {
 
       const isOwnMessage = sender._id === user?._id;
       const isMessageUnsent = message.isUnsent || message.unsent;
+      const isMessageSending = message._isSending;
 
       return (
         <div
           key={message._id}
           data-message-id={message._id}
+          data-status={message.status || "sent"}
           className={`message ${isOwnMessage ? "sent" : "received"} ${
             isMessageUnsent ? "unsent" : ""
-          } ${message.type === "system" ? "system-message" : ""}`}
+          } ${message.type === "system" ? "system-message" : ""} ${
+            isMessageSending ? "sending" : ""
+          }`}
           onContextMenu={(e) => {
             e.preventDefault();
             handleLongPress(message);
@@ -854,6 +1284,7 @@ const GroupChatInterface: React.FC = () => {
           <div className="message-info">
             <span className="message-time">
               {formatTime(message.createdAt)}
+              {isMessageSending && <span className="sending-indicator"> (sending...)</span>}
             </span>
           </div>
 
@@ -1046,7 +1477,7 @@ const GroupChatInterface: React.FC = () => {
     try {
       const token = localStorage.getItem("token");
       await axios.delete(
-        `http://localhost:3005/api/groups/message/${selectedMessageForDelete._id}`,
+        `${API_ENDPOINT}/groups/message/${selectedMessageForDelete._id}`,
         {
           headers: { Authorization: `Bearer ${token}` },
           data: { deleteType: "everyone" },
@@ -1086,7 +1517,7 @@ const GroupChatInterface: React.FC = () => {
     try {
       const token = localStorage.getItem("token");
       await axios.delete(
-        `http://localhost:3005/api/groups/message/${selectedMessageForDelete._id}/for-me`,
+        `${API_ENDPOINT}/groups/message/${selectedMessageForDelete._id}/for-me`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -1136,7 +1567,7 @@ const GroupChatInterface: React.FC = () => {
     try {
       const token = localStorage.getItem("token");
       await axios.post(
-        `http://localhost:3005/api/groups/transfer-admin`,
+        `${API_ENDPOINT}/groups/transfer-admin`,
         {
           groupId,
           newAdminId: transferToUserId,
@@ -1167,7 +1598,7 @@ const GroupChatInterface: React.FC = () => {
     try {
       const token = localStorage.getItem("token");
       await axios.post(
-        `http://localhost:3005/api/groups/remove-member`,
+        `${API_ENDPOINT}/groups/remove-member`,
         {
           groupId,
           memberId: user._id,
@@ -1206,7 +1637,7 @@ const GroupChatInterface: React.FC = () => {
     try {
       const token = localStorage.getItem("token");
       const response = await axios.post(
-        `http://localhost:3005/api/groups/remove-member`,
+        `${API_ENDPOINT}/groups/remove-member`,
         {
           groupId,
           memberId: user._id,
@@ -1250,7 +1681,7 @@ const GroupChatInterface: React.FC = () => {
 
     try {
       const token = localStorage.getItem("token");
-      await axios.delete(`http://localhost:3005/api/groups/${groupId}`, {
+      await axios.delete(`${API_ENDPOINT}/groups/${groupId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -1313,7 +1744,7 @@ const GroupChatInterface: React.FC = () => {
 
       const token = localStorage.getItem("token");
       const response = await axios.put(
-        `http://localhost:3005/api/groups/${group._id}/avatar`,
+        `${API_ENDPOINT}/groups/${group._id}/avatar`,
         formData,
         {
           headers: {
@@ -1551,7 +1982,7 @@ const GroupChatInterface: React.FC = () => {
                           try {
                             const token = localStorage.getItem("token");
                             await axios.post(
-                              `http://localhost:3005/api/groups/remove-member`,
+                              `${API_ENDPOINT}/groups/remove-member`,
                               {
                                 groupId,
                                 memberId,
@@ -1591,7 +2022,7 @@ const GroupChatInterface: React.FC = () => {
                           try {
                             const token = localStorage.getItem("token");
                             await axios.post(
-                              `http://localhost:3005/api/groups/add-co-admin`,
+                              `${API_ENDPOINT}/groups/add-co-admin`,
                               {
                                 groupId,
                                 userId: memberId,
@@ -1628,7 +2059,7 @@ const GroupChatInterface: React.FC = () => {
                           try {
                             const token = localStorage.getItem("token");
                             await axios.post(
-                              `http://localhost:3005/api/groups/remove-co-admin`,
+                              `${API_ENDPOINT}/groups/remove-co-admin`,
                               {
                                 groupId,
                                 userId: memberId,
@@ -1696,7 +2127,7 @@ const GroupChatInterface: React.FC = () => {
                     try {
                       const token = localStorage.getItem("token");
                       const response = await axios.get(
-                        `http://localhost:3005/api/search/users?query=${newMemberSearch}`,
+                        `${API_ENDPOINT}/search/users?query=${newMemberSearch}`,
                         {
                           headers: { Authorization: `Bearer ${token}` },
                         }
@@ -1745,7 +2176,7 @@ const GroupChatInterface: React.FC = () => {
                       try {
                         const token = localStorage.getItem("token");
                         await axios.post(
-                          `http://localhost:3005/api/groups/add-member`,
+                          `${API_ENDPOINT}/groups/add-member`,
                           {
                             groupId,
                             memberId: user._id,
@@ -1852,7 +2283,7 @@ const GroupChatInterface: React.FC = () => {
                     try {
                       const token = localStorage.getItem("token");
                       await axios.put(
-                        `http://localhost:3005/api/groups/${groupId}`,
+                        `${API_ENDPOINT}/groups/${groupId}`,
                         {
                           name: newGroupName,
                         },
@@ -2001,7 +2432,7 @@ const GroupChatInterface: React.FC = () => {
                             try {
                               const token = localStorage.getItem("token");
                               await axios.post(
-                                `http://localhost:3005/api/groups/remove-member`,
+                                `${API_ENDPOINT}/groups/remove-member`,
                                 {
                                   groupId,
                                   memberId,

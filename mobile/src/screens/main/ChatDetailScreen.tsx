@@ -167,9 +167,26 @@ const ChatDetailScreen = () => {
 
         console.log(`[SOCKET DEBUG] Socket connected, joining room: ${roomId}`);
 
-        // For direct chat, handle both ways of joining
-        if (!isGroup) {
-          // Join direct chat room with standard format
+        // For group chats, use proper prefixed format for better compatibility with web
+        if (isGroup) {
+          // Join with standard group ID format
+          socketService.joinChatRoom(roomId, true);
+
+          // Also join with explicit group: prefix format to maximize compatibility
+          if (socketRef.current) {
+            socketRef.current.emit("joinRoom", { roomId: `group:${roomId}` });
+            console.log(
+              `[SOCKET DEBUG] Also joined with prefix format: group:${roomId}`
+            );
+
+            // Join with groupRoom format for newer servers
+            socketRef.current.emit("joinGroupRoom", { groupId: roomId });
+            console.log(
+              `[SOCKET DEBUG] Also joined with groupRoom event: ${roomId}`
+            );
+          }
+        } else {
+          // For direct chat, handle both ways of joining
           socketService.joinChatRoom(roomId, false);
 
           // Also directly join with explicit sender/receiver for better compatibility
@@ -185,12 +202,15 @@ const ChatDetailScreen = () => {
           if (socketRef.current) {
             socketRef.current.emit("joinDirectRoom", directRoomData);
           }
-        } else {
-          // For group chat, join with proper group: prefix
-          socketService.joinChatRoom(roomId, true);
         }
 
+        // Request missed messages using both formats for compatibility
         socketService.requestMissedMessages(roomId, isGroup);
+        if (isGroup && socketRef.current) {
+          socketRef.current.emit("getMissedMessages", {
+            roomId: `group:${roomId}`,
+          });
+        }
 
         // Setup connection state listeners
         if (connectionStateCleanup) {
@@ -204,9 +224,18 @@ const ChatDetailScreen = () => {
               "[SOCKET DEBUG] Socket reconnected, rejoining room and requesting missed messages"
             );
 
-            // For direct chat, also join user's own direct room (used by some servers)
-            if (!isGroup) {
-              // Join direct chat room
+            if (isGroup) {
+              // For group chat, rejoin with both formats
+              socketService.joinChatRoom(roomId, true);
+
+              if (socketRef.current) {
+                socketRef.current.emit("joinRoom", {
+                  roomId: `group:${roomId}`,
+                });
+                socketRef.current.emit("joinGroupRoom", { groupId: roomId });
+              }
+            } else {
+              // For direct chat
               socketService.joinChatRoom(roomId, false);
 
               // Join personal room (some servers use this format)
@@ -217,20 +246,19 @@ const ChatDetailScreen = () => {
                 sender: user._id,
                 receiver: contactId,
               };
-              console.log(
-                `[SOCKET DEBUG] Rejoining direct room with: ${JSON.stringify(
-                  directRoomData
-                )}`
-              );
+
               if (socketRef.current) {
                 socketRef.current.emit("joinDirectRoom", directRoomData);
               }
-            } else {
-              // For group chat, use the standard join method
-              socketService.joinChatRoom(roomId, true);
             }
 
+            // Request missed messages with both formats
             socketService.requestMissedMessages(roomId, isGroup);
+            if (isGroup && socketRef.current) {
+              socketRef.current.emit("getMissedMessages", {
+                roomId: `group:${roomId}`,
+              });
+            }
           },
           // On disconnect
           (reason) => {
@@ -244,7 +272,7 @@ const ChatDetailScreen = () => {
             `[SOCKET DEBUG] Received message: ${JSON.stringify(newMessage)}`
           );
 
-          // Bỏ qua tin nhắn đã được xử lý qua API
+          // Skip messages already processed via API
           if (newMessage._alreadyProcessed || newMessage._sentViaApi) {
             console.log(
               "[SOCKET DEBUG] Skipping message already processed via API"
@@ -252,29 +280,66 @@ const ChatDetailScreen = () => {
             return;
           }
 
-          // Thêm một kiểm tra mạnh hơn cho tin nhắn trùng lặp
+          // Store message identifiers
           const messageId = newMessage._id;
           const tempId = newMessage._tempId || newMessage.tempId;
           const messageContent = newMessage.content;
           const messageTime = new Date(newMessage.createdAt).getTime();
+          const senderId =
+            typeof newMessage.sender === "object"
+              ? newMessage.sender._id
+              : newMessage.sender;
 
-          // Kiểm tra nếu tin nhắn đã tồn tại trong danh sách dựa trên ID và nội dung
+          // Check if message belongs to current chat
+          const messageGroupId =
+            newMessage.groupId ||
+            (newMessage.room && newMessage.room.includes("group:")
+              ? newMessage.room.replace("group:", "")
+              : null);
+
+          // For group messages, check if this message is for the current group
+          if (isGroup && messageGroupId && messageGroupId !== contactId) {
+            console.log(
+              `[SOCKET DEBUG] Message for different group (${messageGroupId}), ignoring`
+            );
+            return;
+          }
+
+          // For direct messages, verify sender/receiver
+          if (!isGroup && senderId !== user?._id && senderId !== contactId) {
+            console.log(
+              `[SOCKET DEBUG] Message from unrelated user (${senderId}), ignoring`
+            );
+            return;
+          }
+
+          // Check if message has already been tracked by socketService
+          if (socketService.isMessageReceived(messageId, tempId)) {
+            console.log(
+              `[SOCKET DEBUG] Ignoring duplicate message tracked by socketService: ${messageId}/${tempId}`
+            );
+            return;
+          }
+
+          // Mark message as received by socketService
+          socketService.markMessageReceived(messageId, tempId);
+
           setMessages((currentMessages) => {
-            // Tạo một bản sao để kiểm tra và tránh cập nhật state khi không cần thiết
+            // Create a copy to check and avoid updating state unnecessarily
             const existingMessages = [...currentMessages];
 
-            // Kiểm tra xem tin nhắn đã tồn tại chưa
+            // Check if message already exists
             const isDuplicate = existingMessages.some((msg) => {
-              // Kiểm tra theo ID
+              // Check by ID
               if (msg._id === messageId) return true;
 
-              // Kiểm tra theo tempId nếu có
+              // Check by tempId
               if (tempId && msg.tempId === tempId) return true;
 
-              // Kiểm tra trùng lặp theo nội dung và thời gian gần (trong vòng 2 giây)
+              // Check for duplicates by content and time
               if (
                 msg.content === messageContent &&
-                msg.sender._id === newMessage.sender._id &&
+                msg.sender._id === senderId &&
                 Math.abs(new Date(msg.createdAt).getTime() - messageTime) < 2000
               ) {
                 return true;
@@ -287,25 +352,13 @@ const ChatDetailScreen = () => {
               console.log(
                 `[SOCKET DEBUG] Ignoring duplicate message: ${messageId}/${tempId}`
               );
-              return currentMessages; // Trả về state hiện tại không thay đổi
+              return currentMessages;
             }
 
             // Log message details
             console.log(
-              `[SOCKET DEBUG] Processing message: ID=${messageId}, TempID=${tempId}, Sender=${newMessage.sender._id}`
+              `[SOCKET DEBUG] Processing message: ID=${messageId}, TempID=${tempId}, Sender=${senderId}`
             );
-
-            // Check if this message has already been processed
-            // First check socketService's tracked messages
-            if (socketService.isMessageReceived(messageId, tempId)) {
-              console.log(
-                `[SOCKET DEBUG] Ignoring duplicate message tracked by socketService: ${messageId}/${tempId}`
-              );
-              return currentMessages;
-            }
-
-            // Mark message as received
-            socketService.markMessageReceived(messageId, tempId);
 
             // Normalize the message format for UI
             const normalizedMessage: Message = {
@@ -323,13 +376,13 @@ const ChatDetailScreen = () => {
                       `${newMessage.sender.firstName || ""} ${
                         newMessage.sender.lastName || ""
                       }`.trim()
-                    : newMessage.sender._id === user._id
+                    : newMessage.sender === user?._id
                     ? user?.name || "You"
                     : chatName,
                 avt:
                   typeof newMessage.sender === "object"
                     ? newMessage.sender.avt || newMessage.sender.avatar || ""
-                    : newMessage.sender._id === user._id
+                    : newMessage.sender === user?._id
                     ? user?.avt || ""
                     : contactAvatar,
               },
@@ -338,26 +391,29 @@ const ChatDetailScreen = () => {
               unsent: newMessage.unsent || false,
               fileUrl: newMessage.fileUrl || newMessage.file?.url || "",
               fileName: newMessage.fileName || newMessage.file?.name || "",
-              roomId: newMessage.roomId || roomId,
-              tempId: tempId, // Lưu tempId vào tin nhắn để kiểm tra sau này
+              roomId: newMessage.roomId || roomIdRef.current,
+              tempId: tempId,
             };
 
             // Add group-specific properties if it's a group message
-            if (isGroup || newMessage.chatType === "group") {
+            if (isGroup || newMessage.chatType === "group" || messageGroupId) {
               normalizedMessage.groupId = contactId;
             }
 
-            // Cập nhật state với tin nhắn mới
+            // Update state with new message
             return [normalizedMessage, ...existingMessages];
           });
 
           // Mark as read if message is from the other person
-          if (newMessage.sender._id !== user._id) {
+          if (newMessage.sender._id !== user?._id) {
             console.log(`[SOCKET DEBUG] Marking message as read: ${messageId}`);
             socketService.markMessageAsRead({
               messageId: messageId,
-              sender: newMessage.sender._id,
-              receiver: user._id,
+              sender:
+                typeof newMessage.sender === "object"
+                  ? newMessage.sender._id
+                  : newMessage.sender,
+              receiver: user?._id,
             });
           }
         };
@@ -891,11 +947,34 @@ const ChatDetailScreen = () => {
       // Initial load
       loadGroupMessages();
 
-      // Set up periodic reload every 10 seconds
+      // Set up periodic reload every 5 seconds (reduced from 10 seconds)
       const intervalId = setInterval(() => {
-        console.log("Periodic reload of group messages...");
+        console.log("[SOCKET DEBUG] Periodic reload of group messages...");
+
+        // Check if socket is still connected, reconnect if needed
+        if (!socketRef.current || !socketRef.current.connected) {
+          console.log("[SOCKET DEBUG] Socket disconnected, reconnecting...");
+          socketService.initSocket().then((socket) => {
+            if (socket) {
+              socketRef.current = socket;
+              console.log(
+                "[SOCKET DEBUG] Socket reconnected, rejoining group..."
+              );
+
+              // Join the group room with various formats
+              socketService.joinChatRoom(contactId, true);
+              socket.emit("joinRoom", { roomId: `group:${contactId}` });
+              socket.emit("joinGroupRoom", { groupId: contactId });
+
+              // Request missed messages
+              socketService.requestMissedMessages(contactId, true);
+            }
+          });
+        }
+
+        // Always reload messages from API
         loadGroupMessages();
-      }, 10000);
+      }, 5000);
 
       // Cleanup interval on unmount
       return () => clearInterval(intervalId);
@@ -1033,7 +1112,93 @@ const ChatDetailScreen = () => {
       if (isGroup) {
         // For group messages
         console.log("Sending group message");
-        success = await socketService.sendGroupMessage(messageData);
+
+        try {
+          // Try API first to ensure persistence
+          const token = await AsyncStorage.getItem("token");
+          if (!token) {
+            throw new Error("No auth token available");
+          }
+
+          const apiResponse = await axios.post(
+            `${API_URL}/api/groups/message`,
+            {
+              groupId: contactId,
+              content: content,
+              type: type,
+              tempId: tempId,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          if (apiResponse.data && apiResponse.data._id) {
+            console.log(
+              "Group message API response success:",
+              apiResponse.data._id
+            );
+
+            // Update the temporary message with the real ID
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg._id === tempId
+                  ? { ...msg, _id: apiResponse.data._id, sending: false }
+                  : msg
+              )
+            );
+
+            success = true;
+          }
+        } catch (apiError) {
+          console.error("Group API send failed:", apiError);
+
+          // If API fails, try socket as fallback
+          if (socketRef.current && socketRef.current.connected) {
+            try {
+              // Call the async function but handle the Promise properly
+              groupChatService
+                .emitGroupMessage({
+                  roomId: contactId,
+                  groupId: contactId,
+                  content: content,
+                  sender: user._id,
+                  senderId: user._id,
+                  type: type,
+                  tempId: tempId,
+                })
+                .then((socketSuccess) => {
+                  if (socketSuccess) {
+                    console.log("Group message sent successfully via socket");
+                    // Update UI if needed
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg._id === tempId ? { ...msg, sending: false } : msg
+                      )
+                    );
+                  } else {
+                    console.log(
+                      "Socket send failed, group message may be delayed"
+                    );
+                  }
+                })
+                .catch((socketError) => {
+                  console.error(
+                    "Error sending group message via socket:",
+                    socketError
+                  );
+                });
+
+              // Consider the attempt successful since we're handling the Promise
+              success = true;
+            } catch (socketError) {
+              console.error("Socket fallback also failed:", socketError);
+            }
+          }
+        }
       } else {
         // For direct messages
         console.log("Sending direct message");
@@ -1068,21 +1233,37 @@ const ChatDetailScreen = () => {
               )
             );
 
-            // Thêm flag vào tin nhắn socket để biết tin nhắn này đã được xử lý qua API
-            socketService.sendMessage({
-              ...messageData,
-              _id: response.data._id,
-              _alreadyProcessed: true,
-              _sentViaApi: true,
-            });
-
+            // Do NOT send via socket if API succeeded
             success = true;
           }
         } catch (apiError) {
           console.error("API send failed, trying socket only:", apiError);
 
           // Try socket as fallback
-          success = socketService.sendMessage(messageData);
+          if (socketRef.current && socketRef.current.connected) {
+            try {
+              // Call the async function but handle the Promise properly
+              socketService
+                .sendMessage(messageData)
+                .then((socketSuccess) => {
+                  if (socketSuccess) {
+                    console.log("Direct message sent successfully via socket");
+                  } else {
+                    console.log("Socket send failed, message may be delayed");
+                  }
+                })
+                .catch((socketError) => {
+                  console.error("Error sending via socket:", socketError);
+                });
+
+              // Consider the attempt successful since we're handling the Promise
+              success = true;
+            } catch (socketError) {
+              console.log("Socket connection error:", socketError);
+            }
+          } else {
+            console.log("Socket not connected, cannot send via socket");
+          }
         }
       }
 

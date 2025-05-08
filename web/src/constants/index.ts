@@ -1,5 +1,7 @@
 // API endpoints
-export const API_URL = "http://192.168.1.7:3005/api";
+export const API_URL = "http://192.168.1.6:3005";
+export const SOCKET_URL = API_URL; // Using same URL for socket connection
+export const API_ENDPOINT = `${API_URL}/api`;
 
 // Auth related constants
 export const TOKEN_KEY = "token";
@@ -20,3 +22,18 @@ export const TOAST_SUCCESS = "success";
 export const TOAST_ERROR = "error";
 export const TOAST_INFO = "info";
 export const TOAST_WARNING = "warning";
+
+// Socket connection config
+export const SOCKET_OPTIONS = {
+  reconnection: true,
+  reconnectionAttempts: Infinity, // Keep trying to reconnect forever
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 10000,
+  autoConnect: true,
+  transports: ["websocket", "polling"],
+  // This is important for consistency with the mobile client
+  forceNew: false,
+  // Add explicit path for socket to ensure consistent connection
+  path: "/socket.io",
+};

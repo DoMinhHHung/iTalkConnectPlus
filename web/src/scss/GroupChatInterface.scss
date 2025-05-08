@@ -1910,3 +1910,26 @@
     }
   }
 }
+
+/* Add these styles to the existing file */
+
+.message.sending {
+  opacity: 0.8;
+}
+
+.sending-indicator {
+  font-style: italic;
+  color: #aaa;
+  font-size: 0.8em;
+}
+
+/* Style for messages with failed status */
+.message.sent[data-status="failed"] {
+  border-left: 3px solid #ff5252;
+}
+
+.message.sent[data-status="failed"] .message-time::after {
+  content: " (failed)";
+  color: #ff5252;
+  font-weight: bold;
+}

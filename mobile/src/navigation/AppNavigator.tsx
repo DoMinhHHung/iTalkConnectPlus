@@ -22,9 +22,10 @@ import ContactDetailScreen from "../screens/main/ContactDetailScreen";
 import EditProfileScreen from "../screens/main/EditProfileScreen";
 import CreateGroupScreen from "../screens/main/CreateGroupScreen";
 import GroupDetailsScreen from "../screens/main/GroupDetailsScreen";
+import GroupChatScreen from "../screens/main/GroupChatScreen";
 
 // Common Screens
-import ConnectionErrorScreen from "../screens/common/ConnectionErrorScreen";
+// import ConnectionErrorScreen from "../screens/common/ConnectionErrorScreen";
 
 // Stack Navigator Types
 type AuthStackParamList = {
@@ -53,6 +54,10 @@ type MainStackParamList = {
   CreateGroup: undefined;
   GroupDetails: {
     groupId: string;
+  };
+  GroupChat: {
+    groupId: string;
+    groupName: string;
   };
 };
 
@@ -152,6 +157,7 @@ const MainNavigator = () => {
       <MainStack.Screen name="EditProfile" component={EditProfileScreen} />
       <MainStack.Screen name="CreateGroup" component={CreateGroupScreen} />
       <MainStack.Screen name="GroupDetails" component={GroupDetailsScreen} />
+      <MainStack.Screen name="GroupChat" component={GroupChatScreen} />
     </MainStack.Navigator>
   );
 };
@@ -171,10 +177,10 @@ const AppNavigator = () => {
     return <LoadingScreen />;
   }
 
-  // Kiểm tra kết nối API
-  if (!apiConnected) {
-    return <ConnectionErrorScreen />;
-  }
+  // // Kiểm tra kết nối API
+  // if (!apiConnected) {
+  //   return <ConnectionErrorScreen />;
+  // }
 
   // Navigate based on authentication state
   return token ? <MainNavigator /> : <AuthNavigator />;

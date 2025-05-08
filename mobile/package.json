@@ -11,6 +11,7 @@
   "dependencies": {
     "@cloudinary/url-gen": "^1.14.0",
     "@expo/metro-runtime": "~5.0.4",
+    "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/datetimepicker": "^8.3.0",
     "@react-native-picker/picker": "^2.11.0",
@@ -19,6 +20,7 @@
     "@react-navigation/native-stack": "^7.3.11",
     "@react-navigation/stack": "^7.3.0",
     "axios": "^1.9.0",
+    "date-fns": "^4.1.0",
     "expo": "^53.0.7",
     "expo-av": "~15.1.4",
     "expo-document-picker": "~13.1.5",
@@ -35,9 +37,9 @@
     "react-native-gesture-handler": "~2.25.0",
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "~4.10.0",
+    "react-native-uuid": "^2.0.3",
     "react-native-video": "^6.13.0",
     "react-native-web": "^0.20.0",
-    "@cloudinary/react-native": "0.0.2",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {

@@ -3,10 +3,7 @@ import { useParams } from "react-router-dom";
 import axios from "axios";
 import { updateUser, requestOtp } from "../api/auth";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
-import {
-  getUserSuccess,
-  updateUserSuccess,
-} from "../redux/slices/authSlice";
+import { getUserSuccess, updateUserSuccess } from "../redux/slices/authSlice";
 import { User } from "../types";
 import "../scss/ProfilePage.scss";
 import AvatarUpload from "../components/AvatarUpload";
@@ -23,6 +20,8 @@ const ProfilePage: React.FC = () => {
   const [pendingUpdates, setPendingUpdates] = useState<Record<string, any>>({});
   const [showAvatarUpload, setShowAvatarUpload] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [friendCount, setFriendCount] = useState<number>(0);
+  const [groupCount, setGroupCount] = useState<number>(0);
   const dispatch = useAppDispatch();
 
   useEffect(() => {
@@ -83,6 +82,44 @@ const ProfilePage: React.FC = () => {
       setIsEmailChanged(false);
     }
   }, [profileUser, currentUser]);
+
+  useEffect(() => {
+    const fetchFriendAndGroupCount = async () => {
+      if (!profileUser?._id) return;
+      const token = localStorage.getItem("token");
+      try {
+        // Lấy số lượng bạn bè
+        const friendsRes = await axios.get(
+          "http://localhost:3005/api/friendship",
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const accepted = (friendsRes.data || []).filter(
+          (f: any) =>
+            f.status === "accepted" &&
+            (f.requester._id === profileUser._id ||
+              f.recipient._id === profileUser._id)
+        );
+        setFriendCount(accepted.length);
+
+        // Lấy số lượng nhóm
+        const groupsRes = await axios.get(
+          "http://localhost:3005/api/groups/user/groups",
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        // Chỉ đếm nhóm mà user là thành viên
+        setGroupCount((groupsRes.data || []).length);
+      } catch (err) {
+        setFriendCount(0);
+        setGroupCount(0);
+      }
+    };
+
+    fetchFriendAndGroupCount();
+  }, [profileUser]);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "Chưa cập nhật";
@@ -382,11 +419,11 @@ const ProfilePage: React.FC = () => {
                   <span className="activity-label">Bài viết</span>
                 </div>
                 <div className="activity-item">
-                  <span className="activity-count">0</span>
+                  <span className="activity-count">{friendCount}</span>
                   <span className="activity-label">Bạn bè</span>
                 </div>
                 <div className="activity-item">
-                  <span className="activity-count">0</span>
+                  <span className="activity-count">{groupCount}</span>
                   <span className="activity-label">Nhóm</span>
                 </div>
               </div>

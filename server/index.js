@@ -99,6 +99,43 @@ const userSockets = new Map(); // userId -> socketId
 const onlineUsers = new Set(); // danh sách userId đang online
 let connectCounter = 0; // Đếm số lượng kết nối để giảm log
 
+// Track processed message IDs to avoid duplicates
+const processedMessages = new Map(); // tempId -> messageId
+
+// Function to check if a message is a duplicate
+const isDuplicateMessage = (data) => {
+  const { tempId, content, sender, senderId } = data;
+  const actualSender = senderId || sender;
+  
+  // If no tempId, can't reliably detect duplicates
+  if (!tempId) return false;
+  
+  // Check if we've already processed this tempId recently
+  if (processedMessages.has(tempId)) {
+    console.log(`Duplicate message detected with tempId: ${tempId}`);
+    return true;
+  }
+  
+  // Store this message ID and set expiry (clean up after 1 minute)
+  processedMessages.set(tempId, {
+    content,
+    sender: actualSender,
+    timestamp: Date.now()
+  });
+  
+  // Clean up old entries every 30 seconds to prevent memory leaks
+  setTimeout(() => {
+    const now = Date.now();
+    for (const [id, data] of processedMessages.entries()) {
+      if (now - data.timestamp > 60000) { // 1 minute
+        processedMessages.delete(id);
+      }
+    }
+  }, 30000);
+  
+  return false;
+};
+
 io.on("connection", (socket) => {
   // Chỉ log thông tin socket.id nếu cần thiết cho debug
   connectCounter++;
@@ -308,6 +345,12 @@ io.on("connection", (socket) => {
     } = data;
 
     try {
+      // Check for duplicates
+      if (isDuplicateMessage(data)) {
+        console.log(`Skipping duplicate group message from ${senderId} with tempId ${tempId}`);
+        return;
+      }
+
       // Tạo roomId cho nhóm
       const roomId = `group:${groupId}`;
 
@@ -351,11 +394,27 @@ io.on("connection", (socket) => {
         expiryDate,
       });
 
+      // Store the real message ID with this tempId
+      if (tempId && message._id) {
+        processedMessages.set(tempId, { 
+          messageId: message._id,
+          content,
+          sender: senderId,
+          timestamp: Date.now()
+        });
+      }
+
       // Populate thông tin người gửi
       await message.populate("sender", "name avt");
 
       // Gửi tin nhắn đến tất cả thành viên trong nhóm
       io.to(roomId).emit("receiveGroupMessage", {
+        ...message.toObject(),
+        _tempId: tempId,
+      });
+
+      // Also emit as groupMessage for mobile clients
+      io.to(roomId).emit("groupMessage", {
         ...message.toObject(),
         _tempId: tempId,
       });
@@ -370,6 +429,99 @@ io.on("connection", (socket) => {
         error: error.message,
       });
     }
+  });
+
+  // Handler for generic message event (used by web client for group messages)
+  socket.on("message", async (data) => {
+    // Check if this is a group message
+    if (data.room && data.room.startsWith('group:') && data.groupId) {
+      // Check for duplicates
+      if (isDuplicateMessage(data)) {
+        console.log(`Skipping duplicate message event from ${data.sender || data.senderId} with tempId ${data.tempId}`);
+        return;
+      }
+      
+      // Extract groupId from room
+      const groupId = data.groupId;
+      const senderId = data.sender || currentUserId;
+      
+      try {
+        // Get the room name from data or create it
+        const roomId = data.room;
+        
+        // Check if user is a member of the group
+        const group = await Group.findById(groupId);
+        if (!group) {
+          console.log(`Group not found: ${groupId}`);
+          return;
+        }
+        
+        if (!group.members.includes(senderId)) {
+          console.log(`User ${senderId} is not a member of group ${groupId}`);
+          return;
+        }
+        
+        // Process reply data if exists
+        let replyToData = null;
+        if (data.replyToId) {
+          const replyMessage = await chatController.findMessageById(data.replyToId);
+          if (replyMessage) {
+            replyToData = {
+              _id: replyMessage._id,
+              content: replyMessage.content,
+              sender: replyMessage.sender,
+            };
+          }
+        }
+        
+        // Save the message
+        const message = await groupChatController.saveGroupMessage({
+          roomId,
+          groupId,
+          senderId,
+          content: data.content,
+          type: data.type || 'text',
+          tempId: data.tempId,
+          replyTo: replyToData,
+          fileUrl: data.fileUrl,
+          fileName: data.fileName,
+          fileSize: data.fileSize,
+          fileThumbnail: data.fileThumbnail,
+          fileId: data.fileId,
+          expiryDate: data.expiryDate,
+        });
+        
+        // Store the real message ID with this tempId
+        if (data.tempId && message._id) {
+          processedMessages.set(data.tempId, { 
+            messageId: message._id,
+            content: data.content,
+            sender: senderId,
+            timestamp: Date.now()
+          });
+        }
+        
+        // Populate sender information
+        await message.populate("sender", "name avt");
+        
+        // Emit to all members in the room
+        io.to(roomId).emit("groupMessage", {
+          ...message.toObject(),
+          _tempId: data.tempId,
+        });
+        
+        // Also emit as receiveGroupMessage for web clients
+        io.to(roomId).emit("receiveGroupMessage", {
+          ...message.toObject(),
+          _tempId: data.tempId,
+        });
+        
+        console.log(`Message event processed as group message from ${senderId} to group ${groupId}`);
+      } catch (error) {
+        console.error("Error processing message event as group message:", error);
+      }
+    }
+    // You can add handlers for other types of messages here if needed
   });
 
   // Reaction trong nhóm

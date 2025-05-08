@@ -38,7 +38,12 @@ import {
   incrementUnreadMessages,
   resetUnreadMessages,
 } from "../redux/slices/messageSlice";
-import { API_URL } from "../constants";
+import {
+  API_URL,
+  API_ENDPOINT,
+  SOCKET_URL,
+  SOCKET_OPTIONS,
+} from "../constants";
 
 const ChatInterface: React.FC = () => {
   const { friendId } = useParams<{ friendId: string }>();
@@ -215,189 +220,168 @@ const ChatInterface: React.FC = () => {
     const token = localStorage.getItem("token");
     if (!token || !user) return;
 
-    const newSocket = io("http://localhost:3005", {
+    console.log("Khởi tạo kết nối socket mới");
+
+    // Khởi tạo socket với địa chỉ server
+    const newSocket = io(SOCKET_URL, {
       auth: {
         token,
       },
+      ...SOCKET_OPTIONS,
     });
 
     setSocket(newSocket);
 
-    newSocket.on("receiveMessage", (data: any) => {
+    // Xử lý kết nối và lỗi
+    newSocket.on("connect", () => {
+      console.log("Socket đã kết nối thành công với ID:", newSocket.id);
+
+      // Tham gia phòng người dùng
+      newSocket.emit("joinUserRoom", { userId: user._id });
+      console.log("Đã tham gia phòng người dùng:", user._id);
+
+      if (friendId) {
+        // Tạo room ID dựa trên ID người dùng và người nhận (đảm bảo cùng một room giữa web và mobile)
+        const sortedIds = [user._id, friendId].sort();
+        const roomId = `${sortedIds[0]}_${sortedIds[1]}`;
+
+        // Tham gia phòng chat cụ thể
+        newSocket.emit("joinRoom", { roomId });
+        console.log("Đã tham gia phòng chat:", roomId);
+
+        // Tham gia phòng trực tiếp (cho tương thích với mobile)
+        newSocket.emit("joinDirectRoom", {
+          sender: user._id,
+          receiver: friendId,
+        });
+        console.log("Đã tham gia phòng chat trực tiếp:", {
+          sender: user._id,
+          receiver: friendId,
+        });
+
+        // Request missed messages
+        console.log("Requesting missed messages for room:", roomId);
+        newSocket.emit("requestMissedMessages", {
+          roomId: roomId,
+          isGroup: false,
+        });
+      }
+    });
+
+    newSocket.on("connect_error", (error) => {
+      console.error("Lỗi kết nối socket:", error);
+    });
+
+    newSocket.on("disconnect", (reason) => {
+      console.log("Socket bị ngắt kết nối:", reason);
+    });
+
+    // Thêm handler cho tin nhắn mới - cải thiện xử lý trùng lặp tin nhắn
+    newSocket.on("message", (data) => {
       console.log("Nhận tin nhắn mới:", data);
-      const newMessage: Message = {
-        _id: data._id,
-        sender: data.sender,
-        receiver: data.receiver,
-        content: data.content,
-        createdAt: data.createdAt,
-        status: data.status || "delivered",
-        chatType: "private",
-        ...(data.replyTo
-          ? {
-              replyTo: {
-                _id: data.replyTo._id,
-                content: data.replyTo.content,
-                sender: data.replyTo.sender,
-              },
-            }
-          : {}),
-        ...(data.type ? { type: data.type } : {}),
-        ...(data.fileUrl ? { fileUrl: data.fileUrl } : {}),
-        ...(data.fileName ? { fileName: data.fileName } : {}),
-        ...(data.fileSize ? { fileSize: data.fileSize } : {}),
-        ...(data.fileThumbnail ? { fileThumbnail: data.fileThumbnail } : {}),
-        ...(data.fileId ? { fileId: data.fileId } : {}),
-        ...(data.expiryDate ? { expiryDate: data.expiryDate } : {}),
-      };
 
-      // Xử lý cập nhật tin nhắn tạm nếu có
-      if (data._tempId) {
-        // Thay thế tin nhắn tạm thời bằng tin nhắn thật từ server thay vì thêm tin nhắn mới
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg._id === data._tempId
-              ? { ...newMessage, _tempId: data._tempId }
-              : msg
-          )
+      // Kiểm tra xem đã có tin nhắn với ID hoặc tempId tương tự chưa
+      setMessages((prevMessages) => {
+        const isDuplicate = prevMessages.some(
+          (msg) =>
+            (data._id && msg._id === data._id) ||
+            (data.tempId && msg._id === data.tempId) ||
+            (msg.tempId && data._id && msg.tempId === data._id)
         );
-        // Thêm return để không thêm tin nhắn mới nếu đã có tin nhắn tạm
-        return;
-      }
 
-      // Kiểm tra tin nhắn đến từ user hiện tại không (có thể từ tab khác)
-      const isFromCurrentUser =
-        typeof data.sender === "string"
-          ? data.sender === user?._id
-          : data.sender._id === user?._id;
-
-      if (isFromCurrentUser) {
-        // Chỉ thêm vào danh sách tin nhắn
-        setMessages((prev) => [...prev, newMessage]);
-      } else {
-        // Kiểm tra xem có đang ở trong cuộc trò chuyện với người gửi không
-        const isCurrentConversation =
-          (typeof data.sender === "string" && data.sender === friendId) ||
-          (typeof data.sender !== "string" && data.sender._id === friendId);
-
-        // Thêm tin nhắn vào danh sách
-        setMessages((prev) => [...prev, newMessage]);
-
-        // Nếu không phải là cuộc trò chuyện hiện tại, tăng số tin nhắn chưa đọc
-        if (!isCurrentConversation) {
-          console.log("Tăng số tin nhắn chưa đọc");
-          dispatch(incrementUnreadMessages());
-        } else {
-          // Đánh dấu là đã đọc nếu đang trong cuộc trò chuyện
-          if (socket) {
-            socket.emit("messageDelivered", { messageId: data._id });
-          }
+        if (isDuplicate) {
+          console.log("Bỏ qua tin nhắn trùng lặp:", data._id || data.tempId);
+          return prevMessages;
         }
-      }
-    });
 
-    // Lắng nghe trạng thái tin nhắn
-    newSocket.on("messageStatus", (data: any) => {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg._id === data.messageId ? { ...msg, status: data.status } : msg
-        )
-      );
-    });
+        // Xử lý tin nhắn tạm thời trong danh sách tin nhắn
+        if (data.tempId) {
+          const updatedMessages = prevMessages.map((msg) =>
+            msg._id === data.tempId ? { ...data, _id: data._id } : msg
+          );
 
-    // Thêm sự kiện unsendMessage
-    newSocket.on("messageUnsent", (data: { messageId: string }) => {
-      console.log("Tin nhắn đã bị thu hồi:", data);
-      setMessages((prevMessages) =>
-        prevMessages.map((msg) =>
-          msg._id === data.messageId
-            ? { ...msg, content: "Tin nhắn đã bị thu hồi", unsent: true }
-            : msg
-        )
-      );
-    });
+          // Nếu không có thay đổi (không tìm thấy tempId), thêm tin nhắn mới
+          if (
+            JSON.stringify(updatedMessages) === JSON.stringify(prevMessages)
+          ) {
+            return [...prevMessages, data];
+          }
 
-    // Thêm sự kiện xóa toàn bộ tin nhắn
-    newSocket.on("conversationDeleted", (data: { senderId: string }) => {
-      console.log("Cuộc trò chuyện đã bị xóa bởi:", data.senderId);
-      // Nếu là cuộc trò chuyện hiện tại, xóa tất cả tin nhắn
-      if (data.senderId === friendId) {
-        setMessages([]);
-      }
-    });
+          return updatedMessages;
+        }
 
-    // Lắng nghe sự kiện trạng thái người dùng
-    newSocket.on("userOnline", (userId: string) => {
-      setOnlineUsers((prev) => {
-        const newSet = new Set(prev);
-        newSet.add(userId);
-        return newSet;
+        return [...prevMessages, data];
       });
-    });
 
-    newSocket.on("userOffline", (userId: string) => {
-      setOnlineUsers((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(userId);
-        return newSet;
-      });
-    });
-
-    // Lấy danh sách người dùng online khi kết nối
-    newSocket.on("onlineUsers", (userIds: string[]) => {
-      setOnlineUsers(new Set(userIds));
-    });
-
-    // Lắng nghe sự kiện đang nhập
-    newSocket.on("userTyping", (data: { userId: string }) => {
-      if (friendId && data.userId === friendId) {
-        setIsTyping(true);
+      // Cập nhật trạng thái tin nhắn thành "seen" nếu là người nhận
+      if (data.sender !== user._id && socket) {
+        socket.emit("messageRead", {
+          messageId: data._id,
+          sender: data.sender,
+          receiver: user._id,
+        });
       }
     });
-
-    newSocket.on("userStoppedTyping", (data: { userId: string }) => {
-      if (friendId && data.userId === friendId) {
-        setIsTyping(false);
-      }
-    });
-
-    // Lắng nghe sự kiện cập nhật trạng thái tin nhắn
-    newSocket.on(
-      "messageStatusUpdate",
-      (data: { messageId: string; status: "delivered" | "seen" }) => {
-        setMessages((prevMessages) =>
-          prevMessages.map((msg) =>
-            msg._id === data.messageId ? { ...msg, status: data.status } : msg
-          )
-        );
-      }
-    );
-
-    // Lắng nghe reactions
-    newSocket.on(
-      "messageReaction",
-      (data: { messageId: string; userId: string; emoji: string }) => {
-        console.log("Nhận reaction:", data);
-        setMessages((prevMessages) =>
-          prevMessages.map((msg) =>
-            msg._id === data.messageId
-              ? {
-                  ...msg,
-                  reactions: {
-                    ...(msg.reactions || {}),
-                    [data.userId]: data.emoji,
-                  },
-                }
-              : msg
-          )
-        );
-      }
-    );
 
     return () => {
-      newSocket.disconnect();
+      console.log("Dọn dẹp kết nối socket");
+      if (newSocket) {
+        // Rời khỏi các phòng
+        if (friendId) {
+          const sortedIds = [user._id, friendId].sort();
+          const roomId = `${sortedIds[0]}_${sortedIds[1]}`;
+          newSocket.emit("leaveRoom", { roomId });
+        }
+        newSocket.disconnect();
+      }
     };
   }, [friendId, user, dispatch]);
+
+  // Thêm cơ chế polling định kỳ để làm dự phòng
+  useEffect(() => {
+    if (!friendId || !user) return;
+
+    // Khởi tạo interval để poll tin nhắn mới mỗi 5 giây
+    const intervalId = setInterval(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) return;
+
+        // Lấy tin nhắn mới nhất từ server
+        const response = await axios.get(
+          `${API_ENDPOINT}/chat/messages/${user._id}/${friendId}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        // Nếu có tin nhắn mới, cập nhật state
+        if (response.data && response.data.length > 0) {
+          // So sánh với tin nhắn hiện có để chỉ thêm tin nhắn mới
+          setMessages((currentMessages) => {
+            const existingIds = new Set(currentMessages.map((msg) => msg._id));
+            const newMessages = response.data.filter(
+              (msg: Message) => !existingIds.has(msg._id)
+            );
+
+            if (newMessages.length > 0) {
+              console.log(
+                `Tìm thấy ${newMessages.length} tin nhắn mới qua polling`
+              );
+              return [...currentMessages, ...newMessages];
+            }
+
+            return currentMessages;
+          });
+        }
+      } catch (error) {
+        console.error("Lỗi khi poll tin nhắn mới:", error);
+      }
+    }, 5000); // Poll mỗi 5 giây
+
+    // Dọn dẹp interval khi component unmount
+    return () => clearInterval(intervalId);
+  }, [friendId, user]);
 
   // Scroll đến tin nhắn mới
   useEffect(() => {
@@ -540,6 +524,10 @@ const ChatInterface: React.FC = () => {
     // Tạo ID tạm thời cho tin nhắn
     const tempId = Date.now().toString();
 
+    // Tạo room ID nhất quán (giống mobile)
+    const sortedIds = [user._id, friendId].sort();
+    const roomId = `${sortedIds[0]}_${sortedIds[1]}`;
+
     // Tạo tin nhắn tạm thời để hiển thị ngay lập tức
     const tempMessage: Message = {
       _id: tempId,
@@ -565,19 +553,22 @@ const ChatInterface: React.FC = () => {
     setMessages((prev) => [...prev, tempMessage]);
 
     console.log("Gửi tin nhắn:", {
-      sender: user._id,
-      receiver: friendId,
+      senderId: user._id,
+      receiverId: friendId,
       content: newMessage,
       tempId, // Gửi ID tạm để server có thể cập nhật sau
+      roomId,
       chatType: "private",
       ...(replyToMessage ? { replyToId: replyToMessage._id } : {}),
     });
 
+    // Gọi emit với định dạng giống mobile để đảm bảo tương thích
     socket.emit("sendMessage", {
       sender: user._id,
       receiver: friendId,
       content: newMessage,
       tempId,
+      roomId,
       chatType: "private",
       ...(replyToMessage ? { replyToId: replyToMessage._id } : {}),
     });
@@ -738,20 +729,24 @@ const ChatInterface: React.FC = () => {
       formData.append("receiverId", friendId);
 
       // Upload file lên server với header phù hợp
-      const response = await axios.post(`${API_URL}/chat/upload`, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`,
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const percentCompleted = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            );
-            setUploadProgress(percentCompleted);
-          }
-        },
-      });
+      const response = await axios.post(
+        `${API_URL}/api/chat/upload`,
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${token}`,
+          },
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total) {
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
+              setUploadProgress(percentCompleted);
+            }
+          },
+        }
+      );
 
       console.log("File upload response:", response.data);
 
@@ -1171,7 +1166,9 @@ const ChatInterface: React.FC = () => {
                   {formatTime(message.createdAt)}
                 </span>
                 {isMessageFromCurrentUser(message, user?._id) &&
-                  renderMessageStatus(message.status)}
+                  renderMessageStatus(
+                    message.status as "sent" | "delivered" | "seen"
+                  )}
               </div>
 
               {/* Menu tương tác khi chọn tin nhắn */}

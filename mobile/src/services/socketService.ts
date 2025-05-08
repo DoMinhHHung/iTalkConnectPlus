@@ -2,6 +2,7 @@ import { io, Socket } from "socket.io-client";
 import { API_URL } from "../config/constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import { getAuthToken } from "../utils/auth";
 
 class SocketService {
   private socket: Socket | null = null;
@@ -11,6 +12,8 @@ class SocketService {
   private receivedMessages: Set<string> = new Set();
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
+  private groupRooms: Set<string> = new Set();
+  private directRooms: Set<string> = new Set();
 
   // Get socket instance (creates one if doesn't exist)
   async initSocket(): Promise<Socket | null> {
@@ -32,7 +35,8 @@ class SocketService {
 
   private async createConnection(): Promise<Socket | null> {
     try {
-      const token = await AsyncStorage.getItem("token");
+      // Get token asynchronously 
+      const token = await getAuthToken();
 
       if (!token) {
         console.log("No token available for socket connection");
@@ -50,17 +54,22 @@ class SocketService {
         auth: {
           token,
         },
-        transports: ["websocket"],
         reconnection: true,
-        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
         timeout: 10000,
+        autoConnect: true,
+        transports: ['websocket', 'polling'],
+        forceNew: false,
+        path: '/socket.io',
       });
 
       // Set up event handlers
       this.socket.on("connect", () => {
         console.log("Socket connected with ID:", this.socket?.id);
         this.reconnectAttempts = 0;
+        this.rejoinRooms();
       });
 
       this.socket.on("disconnect", (reason) => {
@@ -110,63 +119,87 @@ class SocketService {
     }
   }
 
-  // Join a chat room
-  joinChatRoom(roomId: string | any, isGroup: boolean = false): void {
-    // Validate roomId and handle edge cases
-    if (!roomId) {
-      console.error("Cannot join room: Invalid roomId");
-      return;
+  // Rejoin all rooms after reconnection
+  private rejoinRooms() {
+    if (!this.socket) return;
+    
+    // Rejoin group rooms
+    this.groupRooms.forEach(groupId => {
+      console.log('Rejoining group room after reconnection:', groupId);
+      this.joinGroupRoom(groupId);
+    });
+    
+    // Rejoin direct chat rooms
+    this.directRooms.forEach(roomData => {
+      const [sender, receiver] = roomData.split('_');
+      console.log('Rejoining direct room after reconnection:', sender, receiver);
+      this.joinDirectRoom(sender, receiver);
+    });
+  }
+
+  // Join a group room
+  async joinGroupRoom(groupId: string): Promise<boolean> {
+    if (!this.socket) {
+      console.log('Socket not connected, unable to join group room');
+      return false;
     }
 
-    // Handle case where an object is passed instead of string
-    let formattedRoomId: string;
+    // Store room for reconnection
+    this.groupRooms.add(groupId);
+    
+    // Join with multiple formats for compatibility with web client
+    const roomId = `group:${groupId}`;
+    
+    // Format 1: Join with direct roomId
+    this.socket.emit('joinRoom', { roomId });
+    
+    // Format 2: Join with explicit group room
+    this.socket.emit('joinGroupRoom', { groupId });
+    
+    console.log('Joined group chat room:', groupId, 'success:', this.socket.connected);
+    console.log('Explicitly joined group room:', groupId);
+    
+    // Request any missed messages
+    this.socket.emit('requestMissedMessages', {
+      roomId,
+      isGroup: true
+    });
+    console.log('Requested missed messages for group:', groupId);
+    
+    return true;
+  }
 
-    if (typeof roomId === "object") {
-      // If we got an object, try to extract ID or convert to string in a safe way
-      if (roomId._id) {
-        formattedRoomId = roomId._id.toString();
-      } else if (roomId.id) {
-        formattedRoomId = roomId.id.toString();
-      } else {
-        console.error(
-          "Cannot join room: roomId is an object without _id property",
-          roomId
-        );
-        formattedRoomId = JSON.stringify(roomId);
-      }
-    } else {
-      formattedRoomId = roomId.toString();
+  // Join a direct chat room
+  async joinDirectRoom(sender: string, receiver: string): Promise<boolean> {
+    if (!this.socket) {
+      console.log('Socket not connected, unable to join direct room');
+      return false;
     }
 
-    // For group chats, prefix with 'group:' to match server expectations
-    if (isGroup && !formattedRoomId.startsWith("group:")) {
-      formattedRoomId = `group:${formattedRoomId}`;
-    }
-
-    if (this.socket?.connected) {
-      this.socket.emit("joinRoom", { roomId: formattedRoomId });
-      console.log(
-        `Joined room${isGroup ? " (group)" : ""}: ${formattedRoomId}`
-      );
-    } else {
-      console.error("Cannot join room: socket not connected");
-      // Try to reconnect and then join
-      this.initSocket().then((socket) => {
-        if (socket) {
-          socket.emit("joinRoom", { roomId: formattedRoomId });
-          console.log(
-            `Joined room${
-              isGroup ? " (group)" : ""
-            } after reconnection: ${formattedRoomId}`
-          );
-        }
-      });
-    }
+    // Create a consistent room ID format
+    const roomId = [sender, receiver].sort().join('_');
+    
+    // Store room for reconnection
+    this.directRooms.add(roomId);
+    
+    // Join with roomId format
+    this.socket.emit('joinRoom', { roomId });
+    console.log('Joined room:', roomId);
+    
+    // Also join with explicit sender/receiver format
+    this.socket.emit('joinDirectRoom', { sender, receiver });
+    console.log('Explicitly joining direct room with:', { sender, receiver });
+    
+    // Request any missed messages
+    this.socket.emit('requestMissedMessages', { roomId });
+    console.log('Requesting missed messages for room:', roomId);
+    
+    return true;
   }
 
   // Send a message
-  sendMessage(messageData: any): boolean {
-    if (!this.socket?.connected) {
+  async sendMessage(messageData: any): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) {
       console.error("Cannot send message: socket not connected");
       return false;
     }
@@ -220,101 +253,29 @@ class SocketService {
 
   // Send a group message
   async sendGroupMessage(messageData: any): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) {
+      console.error("Socket not connected, unable to emit group message via socket");
+      return false;
+    }
+
     // Create a copy to avoid modifying the original
     const enhancedMessage = {
       ...messageData,
-      chatType: "group",
+      timestamp: messageData.timestamp || new Date().toISOString(),
+      roomId: messageData.roomId || `group:${messageData.groupId}`,
     };
 
-    // Ensure sender and senderId are set
-    if (!enhancedMessage.sender || !enhancedMessage.senderId) {
-      try {
-        const userData = await AsyncStorage.getItem("user");
-        if (userData) {
-          const user = JSON.parse(userData);
-          enhancedMessage.sender = user._id;
-          enhancedMessage.senderId = user._id;
-        }
-      } catch (error) {
-        console.error("Error adding sender to message:", error);
-      }
-    }
-
-    // Format roomId for group messages - use groupId if available
-    if (enhancedMessage.groupId) {
-      enhancedMessage.roomId = enhancedMessage.groupId;
-    }
-
-    // Send via API for reliability and database persistence
-    try {
-      const token = await AsyncStorage.getItem("token");
-      if (token) {
-        console.log("Sending group message via API for reliability");
-
-        const apiMessageData = { ...enhancedMessage };
-
-        const response = await axios.post(
-          `${API_URL}/api/groups/message`,
-          apiMessageData,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        console.log("API response for group message:", response.data);
-
-        // After successful API send, also emit to socket for real-time delivery
-        if (response.data && this.socket?.connected) {
-          // Mark as already handled by API to prevent duplicate display
-          const socketData = {
-            ...response.data,
-            _alreadyHandledByApi: true,
-          };
-
-          // Add proper room format for socket
-          if (socketData.groupId && !socketData.groupId.startsWith("group:")) {
-            socketData.roomId = `group:${socketData.groupId}`;
-          }
-
-          console.log("Also notifying via socket for real-time delivery");
-          this.socket.emit("groupMessage", socketData);
-
-          // Mark received to prevent duplicates
-          this.markMessageReceived(response.data._id, enhancedMessage.tempId);
-        }
-
-        return true;
-      }
-    } catch (error) {
-      console.error("API send failed:", error);
-
-      // Only try socket as fallback if API fails
-      if (this.socket?.connected) {
-        try {
-          console.log("Attempting to send via socket as fallback");
-
-          // Format socket message properly
-          if (
-            enhancedMessage.groupId &&
-            !enhancedMessage.roomId.startsWith("group:")
-          ) {
-            enhancedMessage.roomId = `group:${enhancedMessage.groupId}`;
-          }
-
-          this.socket.emit("groupMessage", enhancedMessage);
-          console.log("Group message sent via socket fallback");
-          return true;
-        } catch (socketError) {
-          console.error("Socket fallback failed:", socketError);
-          return false;
-        }
-      }
-    }
-
-    return false;
+    // Emit with both formats for compatibility
+    this.socket.emit('sendGroupMessage', enhancedMessage);
+    
+    // Also emit generic message format that web can handle
+    this.socket.emit('message', {
+      ...enhancedMessage,
+      room: `group:${messageData.groupId}`
+    });
+    
+    console.log('Socket send result: success');
+    return true;
   }
 
   // Track received messages to prevent duplicates
@@ -348,81 +309,120 @@ class SocketService {
   }
 
   // User typing status
-  sendTypingStatus(data: { sender: string; receiver: string }): void {
-    if (this.socket?.connected) {
-      this.socket.emit("typing", data);
+  async sendTypingStatus(data: { 
+    sender: string; 
+    receiver?: string;
+    groupId?: string;
+    senderName?: string;
+  }): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) return false;
+    
+    if (data.groupId) {
+      this.socket.emit('typingInGroup', {
+        senderId: data.sender,
+        groupId: data.groupId,
+        senderName: data.senderName || "User"
+      });
+    } else if (data.receiver) {
+      this.socket.emit('typing', {
+        sender: data.sender,
+        receiver: data.receiver
+      });
     }
+    
+    return true;
   }
 
-  sendStopTypingStatus(data: { sender: string; receiver: string }): void {
-    if (this.socket?.connected) {
-      this.socket.emit("stopTyping", data);
+  async sendStopTypingStatus(data: { 
+    sender: string; 
+    receiver?: string;
+    groupId?: string;
+  }): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) return false;
+    
+    if (data.groupId) {
+      this.socket.emit('stopTypingInGroup', {
+        senderId: data.sender,
+        groupId: data.groupId
+      });
+    } else if (data.receiver) {
+      this.socket.emit('stopTyping', {
+        sender: data.sender,
+        receiver: data.receiver
+      });
     }
+    
+    return true;
   }
 
   // Mark message as read
-  markMessageAsRead(data: {
+  async markMessageAsRead(data: {
     messageId: string;
     sender: string | null | object;
     receiver: string | null | object;
-  }): void {
-    if (this.socket?.connected) {
-      // Ensure sender and receiver are valid strings
-      const updatedData = {
-        messageId: data.messageId,
-        sender:
-          typeof data.sender === "object"
-            ? (data.sender as any)?._id || ""
-            : data.sender || "",
-        receiver:
-          typeof data.receiver === "object"
-            ? (data.receiver as any)?._id || ""
-            : data.receiver || "",
-      };
+  }): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) return false;
+    
+    // Ensure sender and receiver are valid strings
+    const updatedData = {
+      messageId: data.messageId,
+      sender:
+        typeof data.sender === "object"
+          ? (data.sender as any)?._id || ""
+          : data.sender || "",
+      receiver:
+        typeof data.receiver === "object"
+          ? (data.receiver as any)?._id || ""
+          : data.receiver || "",
+    };
 
-      this.socket.emit("messageRead", updatedData);
-    }
+    this.socket.emit("messageRead", updatedData);
+    return true;
   }
 
   // Reactions
-  addReaction(data: {
+  async addReaction(data: {
     messageId: string;
     userId: string;
     emoji: string;
-  }): void {
-    if (this.socket?.connected) {
-      this.socket.emit("addReaction", data);
-    }
+  }): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) return false;
+    
+    this.socket.emit("addReaction", data);
+    return true;
   }
 
   // Unsend message
-  unsendMessage(data: {
+  async unsendMessage(data: {
     messageId: string;
     senderId: string;
     receiverId: string;
-  }): void {
-    if (this.socket?.connected) {
-      this.socket.emit("unsendMessage", data);
-    }
+  }): Promise<boolean> {
+    if (!this.socket || !this.socket.connected) return false;
+    
+    this.socket.emit("unsendMessage", data);
+    return true;
   }
 
   // Check if user is online
-  isUserOnline(userId: string): boolean {
+  async isUserOnline(userId: string): Promise<boolean> {
     return this.onlineUsers.has(userId);
   }
 
   // Clean up on app close/logout
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
+      this.groupRooms.clear();
+      this.directRooms.clear();
     }
     this.isConnecting = false;
     this.connectionPromise = null;
   }
 
   // Request missed messages for a specific room
-  requestMissedMessages(roomId: string | any, isGroup: boolean = false): void {
+  async requestMissedMessages(roomId: string | any, isGroup: boolean = false): Promise<void> {
     // Validate roomId and handle edge cases
     if (!roomId) {
       console.error("Cannot request missed messages: Invalid roomId");
@@ -507,6 +507,79 @@ class SocketService {
         this.socket.off("disconnect", disconnectHandler);
       }
     };
+  }
+
+  // Backward compatibility method for legacy code
+  async joinChatRoom(roomId: string | any, isGroup: boolean = false): Promise<boolean> {
+    console.log(`[SOCKET COMPATIBILITY] joinChatRoom called with roomId=${roomId}, isGroup=${isGroup}`);
+    
+    try {
+      // Validate roomId and handle edge cases
+      if (!roomId) {
+        console.error("Cannot join room: Invalid roomId");
+        return false;
+      }
+
+      // Handle case where an object is passed instead of string
+      let formattedRoomId: string;
+
+      if (typeof roomId === "object") {
+        // If we got an object, try to extract ID or convert to string
+        if (roomId._id) {
+          formattedRoomId = roomId._id.toString();
+        } else if (roomId.id) {
+          formattedRoomId = roomId.id.toString();
+        } else {
+          console.error(
+            "Cannot join room: roomId is an object without _id property",
+            roomId
+          );
+          formattedRoomId = JSON.stringify(roomId);
+        }
+      } else {
+        formattedRoomId = roomId.toString();
+      }
+
+      // Call the appropriate new method based on room type
+      if (isGroup) {
+        // Extract groupId (remove 'group:' prefix if present)
+        const groupId = formattedRoomId.startsWith('group:') 
+          ? formattedRoomId.substring(6) 
+          : formattedRoomId;
+        
+        return await this.joinGroupRoom(groupId);
+      } else {
+        // For direct chat, we need sender and receiver IDs
+        // Since we don't have those directly, try to extract from roomId
+        const parts = formattedRoomId.split('_');
+        
+        // If roomId is in the format "user1_user2"
+        if (parts.length === 2) {
+          // Try to get current user ID
+          const userData = await AsyncStorage.getItem('user');
+          if (!userData) {
+            console.error("Cannot join direct room: No user data available");
+            return false;
+          }
+          
+          const user = JSON.parse(userData);
+          const userId = user._id;
+          
+          // The other ID is the one that's not the current user
+          const otherId = parts[0] === userId ? parts[1] : parts[0];
+          
+          return await this.joinDirectRoom(userId, otherId);
+        } else {
+          // If not in expected format, just join as a basic room
+          this.socket?.emit('joinRoom', { roomId: formattedRoomId });
+          console.log(`Joined basic room: ${formattedRoomId}`);
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error("Error in joinChatRoom compatibility method:", error);
+      return false;
+    }
   }
 }
 

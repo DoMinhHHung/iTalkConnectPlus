@@ -644,25 +644,24 @@ setTimeout(cleanupExpiredFiles, 5000);
 const uploadToCloudinary = async (req, res) => {
   try {
     console.log("Processing Cloudinary upload request");
-    const { image, folder } = req.body;
+    const { image, folder, resource_type } = req.body;
 
     if (!image) {
-      return res.status(400).json({ message: "No image data provided" });
+      return res.status(400).json({ message: "No media data provided" });
     }
 
-    // Validate image format
-    if (!image.startsWith("data:image/")) {
-      return res.status(400).json({ message: "Invalid image format" });
-    }
+    // Determine resource type based on data
+    let resourceType = resource_type || "auto";
+    let mediaData = image;
+    let dataSizeInKB = Math.round((image.length * 3) / 4 / 1024);
 
-    // Log the size of the incoming image
-    const imageSizeInKB = Math.round((image.length * 3) / 4 / 1024);
-    console.log(`Image size before Cloudinary processing: ${imageSizeInKB} KB`);
+    console.log(`Media size before Cloudinary processing: ${dataSizeInKB} KB`);
+    console.log(`Resource type: ${resourceType}`);
 
     // Add optimization parameters
     const uploadOptions = {
       folder: folder || "italk_app",
-      resource_type: "auto",
+      resource_type: resourceType,
       use_filename: true,
       quality: "auto",
       fetch_format: "auto",
@@ -676,20 +675,20 @@ const uploadToCloudinary = async (req, res) => {
     console.log("Uploading to Cloudinary with optimization parameters");
 
     // Upload to Cloudinary with optimization
-    const result = await cloudinary.uploader.upload(image, uploadOptions);
+    const result = await cloudinary.uploader.upload(mediaData, uploadOptions);
 
     console.log(`Successfully uploaded to Cloudinary: ${result.secure_url}`);
     console.log(
-      `Final image size on Cloudinary: ${Math.round(result.bytes / 1024)} KB`
+      `Final media size on Cloudinary: ${Math.round(result.bytes / 1024)} KB`
     );
 
-    // Return the image URL
+    // Return the media URL
     return res.status(200).json({
       message: "Upload successful",
       url: result.secure_url,
       public_id: result.public_id,
       size: {
-        original: imageSizeInKB,
+        original: dataSizeInKB,
         optimized: Math.round(result.bytes / 1024),
       },
     });
@@ -702,12 +701,12 @@ const uploadToCloudinary = async (req, res) => {
     ) {
       return res.status(413).json({
         message:
-          "Image is too large. Please use a smaller image or compress it first.",
+          "File too large. Please use a smaller file or compress it first.",
         error: error.message,
       });
     }
     return res.status(500).json({
-      message: "Failed to upload image to Cloudinary",
+      message: "Failed to upload to Cloudinary",
       error: error.message,
     });
   }

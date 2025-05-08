@@ -5,6 +5,7 @@ export interface GroupMessage extends Message {
   groupId?: string;
   chatType?: "private" | "group";
   isUnsent?: boolean;
+  _isSending?: boolean;
 }
 
 // Định nghĩa vai trò thành viên trong nhóm

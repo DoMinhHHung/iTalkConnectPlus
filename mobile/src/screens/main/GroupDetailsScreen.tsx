@@ -130,23 +130,66 @@ const GroupDetailsScreen = () => {
       }
       
       // Get contacts
-      const response = await axios.get(`${API_URL}/api/friends`, {
+      const response = await axios.get(`${API_URL}/api/friendship`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       
       if (response.data && Array.isArray(response.data)) {
+        // Process friendship data to get contacts
+        const contactsList = response.data
+          .filter(friendship => friendship.status === 'accepted')
+          .map(friendship => {
+            // Determine which user is the friend
+            const friendData = friendship.requester?._id === user?._id 
+              ? friendship.recipient 
+              : friendship.requester;
+              
+            return {
+              _id: friendData?._id || '',
+              name: friendData?.name || 'Unknown',
+              email: friendData?.email || '',
+              avt: friendData?.avt || ''
+            };
+          })
+          .filter(contact => contact._id); // Filter out any invalid contacts
+        
         // Filter out members already in the group
         const existingMemberIds = groupInfo?.members.map(m => m._id) || [];
-        const filteredContacts = response.data.filter(
+        const filteredContacts = contactsList.filter(
           contact => !existingMemberIds.includes(contact._id)
         );
         
         setContacts(filteredContacts);
+        console.log(`Loaded ${filteredContacts.length} contacts for potential adding to group`);
       }
     } catch (error) {
       console.error('Failed to load contacts:', error);
+      // Try a secondary endpoint as fallback
+      try {
+        console.log('Trying alternate endpoint for contacts...');
+        const token = await AsyncStorage.getItem('token');
+        const response = await axios.get(`${API_URL}/api/friends`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (response.data && Array.isArray(response.data)) {
+          // Filter out members already in the group
+          const existingMemberIds = groupInfo?.members.map(m => m._id) || [];
+          const filteredContacts = response.data.filter(
+            contact => !existingMemberIds.includes(contact._id)
+          );
+          
+          setContacts(filteredContacts);
+          console.log(`Loaded ${filteredContacts.length} contacts from alternate endpoint`);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback endpoint also failed:', fallbackError);
+        Alert.alert('Error', 'Could not load your contacts. Please try again later.');
+      }
     } finally {
       setLoadingContacts(false);
     }
@@ -401,6 +444,15 @@ const GroupDetailsScreen = () => {
     loadContacts();
   };
 
+  const navigateToGroupChat = () => {
+    if (groupInfo) {
+      navigation.navigate('GroupChat', {
+        groupId: groupInfo._id,
+        groupName: groupInfo.name
+      });
+    }
+  };
+
   // Filter contacts by search text
   const filteredContacts = contacts.filter(contact => 
     contact.name.toLowerCase().includes(searchText.toLowerCase()) ||
@@ -449,6 +501,14 @@ const GroupDetailsScreen = () => {
       </View>
 
       <View style={styles.actionButtons}>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={navigateToGroupChat}
+        >
+          <Ionicons name="chatbubbles" size={24} color="#007BFF" />
+          <Text style={styles.actionButtonText}>Chat</Text>
+        </TouchableOpacity>
+        
         {(userPermissions.isAdmin || userPermissions.isCoAdmin) && (
           <TouchableOpacity 
             style={styles.actionButton}
@@ -513,35 +573,42 @@ const GroupDetailsScreen = () => {
                   <TouchableOpacity
                     style={styles.memberActionButton}
                     onPress={() => {
+                      const buttons: Array<any> = [
+                        {
+                          text: 'Cancel',
+                          style: 'cancel' as 'cancel',
+                        }
+                      ];
+                      
+                      if (userPermissions.isAdmin && !isAdmin && !isCoAdmin) {
+                        buttons.push({
+                          text: 'Promote to Co-Admin',
+                          onPress: () => promoteToCoAdmin(item._id),
+                          style: 'default' as 'default',
+                        });
+                      }
+                      
+                      if (userPermissions.isAdmin && isCoAdmin) {
+                        buttons.push({
+                          text: 'Remove from Co-Admin',
+                          onPress: () => demoteFromCoAdmin(item._id),
+                          style: 'default' as 'default',
+                        });
+                      }
+                      
+                      if ((userPermissions.isAdmin && !isAdmin) || 
+                          (userPermissions.isCoAdmin && !isAdmin && !isCoAdmin)) {
+                        buttons.push({
+                          text: 'Remove from Group',
+                          style: 'destructive' as 'destructive',
+                          onPress: () => removeMember(item._id),
+                        });
+                      }
+                      
                       Alert.alert(
                         'Member Actions',
                         `Select an action for ${item.name}`,
-                        [
-                          {
-                            text: 'Cancel',
-                            style: 'cancel',
-                          },
-                          ...(userPermissions.isAdmin && !isAdmin && !isCoAdmin ? [
-                            {
-                              text: 'Promote to Co-Admin',
-                              onPress: () => promoteToCoAdmin(item._id),
-                            },
-                          ] : []),
-                          ...(userPermissions.isAdmin && isCoAdmin ? [
-                            {
-                              text: 'Remove from Co-Admin',
-                              onPress: () => demoteFromCoAdmin(item._id),
-                            },
-                          ] : []),
-                          ...(((userPermissions.isAdmin && !isAdmin) || 
-                             (userPermissions.isCoAdmin && !isAdmin && !isCoAdmin)) ? [
-                            {
-                              text: 'Remove from Group',
-                              style: 'destructive',
-                              onPress: () => removeMember(item._id),
-                            },
-                          ] : []),
-                        ]
+                        buttons
                       );
                     }}
                   >

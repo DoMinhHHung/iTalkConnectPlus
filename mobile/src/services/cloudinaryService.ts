@@ -1,6 +1,6 @@
 import axios from "axios";
 import { CLOUDINARY_CONFIG, API_URL, POSSIBLE_IPS } from "../config/constants";
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from "expo-file-system";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { STORAGE_KEYS } from "../config/constants";
 
@@ -121,27 +121,27 @@ export const uploadImage = async (
     // 1. Thử lấy URL API từ storage
     const savedApiUrl = await AsyncStorage.getItem(STORAGE_KEYS.API_IP);
     const apiUrl = savedApiUrl || API_URL;
-    
+
     console.log(`Thử upload với URL từ storage: ${apiUrl}`);
 
     // 2. Tạo formData
     const formData = new FormData();
     const fileName = imageUri.split("/").pop() || "image.jpg";
     const mimeType = imageUri.endsWith(".png") ? "image/png" : "image/jpeg";
-    
+
     formData.append("file", {
       uri: imageUri,
       name: fileName,
       type: mimeType,
     } as any);
     formData.append("type", "image");
-    
+
     // 3. Thử với token
     const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
     const headers: any = {
       "Content-Type": "multipart/form-data",
     };
-    
+
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
@@ -149,32 +149,39 @@ export const uploadImage = async (
     // 4. Chuyển đổi ảnh sang base64 và thử upload qua Cloudinary trực tiếp
     try {
       console.log("Thử upload qua Cloudinary trước...");
-      const base64 = await FileSystem.readAsStringAsync(imageUri, { encoding: FileSystem.EncodingType.Base64 });
+      const base64 = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
       const formattedBase64 = `data:${mimeType};base64,${base64}`;
-      
+
       const cloudinaryResponse = await axios.post(
         `${apiUrl}/api/chat/upload-cloudinary`,
         {
           image: formattedBase64,
-          folder: CLOUDINARY_CONFIG.FOLDER
+          folder: CLOUDINARY_CONFIG.FOLDER,
         },
         {
           headers: {
             "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           timeout: 10000,
           onUploadProgress: (progressEvent) => {
             if (progressEvent.total && onProgress) {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
               onProgress(percentCompleted);
             }
-          }
+          },
         }
       );
-      
+
       if (cloudinaryResponse.data && cloudinaryResponse.data.url) {
-        console.log("Upload qua Cloudinary thành công:", cloudinaryResponse.data.url);
+        console.log(
+          "Upload qua Cloudinary thành công:",
+          cloudinaryResponse.data.url
+        );
         return {
           secure_url: cloudinaryResponse.data.url,
           bytes: cloudinaryResponse.data.size?.optimized * 1024 || 0,
@@ -190,60 +197,75 @@ export const uploadImage = async (
     // 5. Thử upload trực tiếp lên Cloudinary (không qua server)
     try {
       console.log("Thử upload trực tiếp lên Cloudinary...");
-      const base64 = await FileSystem.readAsStringAsync(imageUri, { encoding: FileSystem.EncodingType.Base64 });
-      
+      const base64 = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
       // Tạo FormData mới
       const cloudinaryFormData = new FormData();
       cloudinaryFormData.append("file", `data:${mimeType};base64,${base64}`);
-      cloudinaryFormData.append("upload_preset", CLOUDINARY_CONFIG.UPLOAD_PRESET);
+      cloudinaryFormData.append(
+        "upload_preset",
+        CLOUDINARY_CONFIG.UPLOAD_PRESET
+      );
       cloudinaryFormData.append("folder", CLOUDINARY_CONFIG.FOLDER);
-      
+
       const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.CLOUD_NAME}/image/upload`;
-      
-      const directResponse = await axios.post(cloudinaryUrl, cloudinaryFormData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        timeout: 15000,
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total && onProgress) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            onProgress(percentCompleted);
-          }
+
+      const directResponse = await axios.post(
+        cloudinaryUrl,
+        cloudinaryFormData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 15000,
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total && onProgress) {
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
+              onProgress(percentCompleted);
+            }
+          },
         }
-      });
-      
+      );
+
       if (directResponse.data && directResponse.data.secure_url) {
-        console.log("Upload trực tiếp lên Cloudinary thành công:", directResponse.data.secure_url);
+        console.log(
+          "Upload trực tiếp lên Cloudinary thành công:",
+          directResponse.data.secure_url
+        );
         return directResponse.data;
       }
     } catch (directCloudinaryError) {
-      console.log("Lỗi khi upload trực tiếp lên Cloudinary:", directCloudinaryError);
+      console.log(
+        "Lỗi khi upload trực tiếp lên Cloudinary:",
+        directCloudinaryError
+      );
       // Không throw lỗi, tiếp tục thử phương pháp khác
     }
 
     // 6. Thử upload qua server với endpoint /api/chat/upload
     try {
       console.log(`Thử upload qua API ${apiUrl}/api/chat/upload...`);
-      const response = await axios.post(
-        `${apiUrl}/api/chat/upload`,
-        formData,
-        {
-          headers,
-          timeout: 15000,
-          onUploadProgress: (progressEvent) => {
-            if (progressEvent.total && onProgress) {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-              onProgress(percentCompleted);
-            }
+      const response = await axios.post(`${apiUrl}/api/chat/upload`, formData, {
+        headers,
+        timeout: 15000,
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total && onProgress) {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            onProgress(percentCompleted);
           }
-        }
-      );
+        },
+      });
 
       if (response.data && response.data.fileUrl) {
         console.log("Upload qua API thành công:", response.data.fileUrl);
         return {
           secure_url: response.data.fileUrl,
           bytes: response.data.fileSize || 0,
-          format: response.data.fileMimeType?.split('/')[1] || "jpg",
+          format: response.data.fileMimeType?.split("/")[1] || "jpg",
           original_filename: response.data.fileName,
         };
       }
@@ -256,8 +278,10 @@ export const uploadImage = async (
     for (let i = 0; i < POSSIBLE_IPS.length; i++) {
       try {
         const alternativeUrl = `http://${POSSIBLE_IPS[i]}:3005`;
-        console.log(`Thử upload với URL thay thế: ${alternativeUrl}/api/chat/upload`);
-        
+        console.log(
+          `Thử upload với URL thay thế: ${alternativeUrl}/api/chat/upload`
+        );
+
         const altResponse = await axios.post(
           `${alternativeUrl}/api/chat/upload`,
           formData,
@@ -266,32 +290,37 @@ export const uploadImage = async (
             timeout: 10000,
             onUploadProgress: (progressEvent) => {
               if (progressEvent.total && onProgress) {
-                const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                const percentCompleted = Math.round(
+                  (progressEvent.loaded * 100) / progressEvent.total
+                );
                 onProgress(percentCompleted);
               }
-            }
+            },
           }
         );
-        
+
         if (altResponse.data && altResponse.data.fileUrl) {
-          console.log("Upload thành công với URL thay thế:", altResponse.data.fileUrl);
-          
+          console.log(
+            "Upload thành công với URL thay thế:",
+            altResponse.data.fileUrl
+          );
+
           // Lưu URL thành công để sử dụng sau này
           await AsyncStorage.setItem(STORAGE_KEYS.API_IP, alternativeUrl);
-          
+
           return {
             secure_url: altResponse.data.fileUrl,
             bytes: altResponse.data.fileSize || 0,
-            format: altResponse.data.fileMimeType?.split('/')[1] || "jpg",
+            format: altResponse.data.fileMimeType?.split("/")[1] || "jpg",
             original_filename: altResponse.data.fileName,
           };
         }
       } catch (altError) {
-        console.log(`Lỗi khi thử với API thay thế ${i+1}:`, altError);
+        console.log(`Lỗi khi thử với API thay thế ${i + 1}:`, altError);
         // Tiếp tục vòng lặp để thử API tiếp theo
       }
     }
-    
+
     // Nếu tất cả các phương pháp đều thất bại, throw lỗi
     throw new Error("Không thể upload ảnh qua bất kỳ phương pháp nào");
   } catch (error) {

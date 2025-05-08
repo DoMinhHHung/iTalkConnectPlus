@@ -3,7 +3,7 @@
 import axios from "axios";
 
 // Đổi về port đúng 3005 như trong file .env của server
-const API_URL = "http://192.168.1.7:3005/api";
+const API_URL = "http://192.168.1.6:3005/api";
 
 console.log("API URL được cấu hình là:", API_URL);
 

@@ -12,12 +12,7 @@ import axios from "axios";
 
 // Danh sách các IP phổ biến có thể thử kết nối (theo thứ tự ưu tiên)
 export const POSSIBLE_IPS = [
-  // '192.168.1.3',
-  // '192.168.1.5',  // IP phổ biến trong mạng LAN
-  "192.168.1.7", // IP phổ biến khác trong mạng LAN
-  // '192.168.1.10', // IP phổ biến khác trong mạng LAN
-  // '192.168.0.102', // IP phổ biến trong dải mạng khác
-  // '192.168.0.100', // IP phổ biến trong dải mạng khác
+  "192.168.1.6", // ip v4 hien tai cua may
 ];
 
 const getHostAddress = () => {
@@ -27,8 +22,7 @@ const getHostAddress = () => {
       return "10.0.2.2";
     }
 
-    // Cho thiết bị Android thật, thử các IP trong mạng LAN
-    return POSSIBLE_IPS[0]; // Sử dụng IP đầu tiên trong danh sách
+    return POSSIBLE_IPS[0];
   }
 
   if (Platform.OS === "ios") {
@@ -41,7 +35,6 @@ const getHostAddress = () => {
     return POSSIBLE_IPS[0];
   }
 
-  // Fallback cho web hoặc các nền tảng khác
   return "localhost";
 };
 
